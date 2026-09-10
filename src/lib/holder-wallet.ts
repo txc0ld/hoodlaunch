@@ -19,14 +19,14 @@ export async function verifyHolderWallet(wallet: HolderWallet, appOrigin: string
   assertActive();
   if (!Array.isArray(accounts) || typeof accounts[0] !== 'string') throw new Error('Connect a wallet first.');
   const address = utils.getAddress(accounts[0]);
-  async function sameWallet() {
+  const sameWallet = async () => {
     assertActive();
     const current = await wallet.request({ method: 'eth_accounts' });
     const chain = await wallet.request({ method: 'eth_chainId' });
     assertActive();
     if (!Array.isArray(current) || typeof current[0] !== 'string' || utils.getAddress(current[0]) !== address) throw new Error('Your wallet account changed. Start verification again.');
     if (Number(chain) !== HOODRICH_CHAIN_ID) throw new Error('Switch your wallet to Robinhood Chain (4663), then verify again.');
-  }
+  };
   await sameWallet();
   const challenge = await request('holder-challenge', { address }) as HolderChallenge;
   assertActive();
