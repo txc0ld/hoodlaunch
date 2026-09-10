@@ -1,11 +1,13 @@
 # Current checkpoint
 
-Task: audit, harden and publish Hoodlaunch (free launch + paid Pro) to txc0ld/hoodlaunch, target launch.hoodrich.rip. Existing www.hoodrich.rip and local operator app untouched.
+Task: publish HOODLABS (free launch + paid Pro) to txc0ld/hoodlaunch, target launch.hoodrich.rip. Existing www.hoodrich.rip and local operator app remain untouched. No live financial actions are authorized for testing.
 
-Base c43ab2c, service candidate ec7edc4. Root implements/integrates public services; critical agent hardens core in ../core; independent Sol verifier examining frozen services; fresh Astra review pending. New complex-builder spawn rejected by runtime thread limit, documented in contract.
+Integrated HEAD bfd6ac7; root owns docs/UI/Vercel/Stripe catalog. Critical owner repairs Relay canonical destination verification, durable Checkout session reservations, then companion marker/expiry findings in isolated worktrees. Independent Sol verifier and Astra reviewer remain assigned; companion review in progress. Source revisions and private evidence under work/public-release.
 
-Observed: initial12 public service/SQL tests PASS after correcting local PGlite test service role to BYPASSRLS and installing Sharp under Node24. Production dependency audit:14 low,0 moderate/high/critical with ws override8.21.3. Combined build/typecheck pending core integration (known absentKraken import/Ponsprops). No funds/realStripecalls.
+Observed baseline: 133 tests passed before checkout-live guard and companion integration; compiled 5-page browser smoke passed including nonce CSP and no signing. Independent service13/13, core focused9/9, checkout live gate3/3 passed. Confirmed release blockers: Relay orphaned destination completion, delayed checkout key rotation duplicate sessions, companion expired review after fsync, partial journal marker contract gap. Do not deploy these as live financial tools. Fresh final checks/review still required.
 
-GitHub gh credentials verified txc0ld, target emptypublic repo withpushpermission. Vercel existing CLI credential directAPI returns403 forbidden; CLI refreshwhoami inprogress. Sites initialization was superseded by user hostingtarget; noSitecreated/deployed. All ownerenv/journal/backups/history excluded.
+Composio verified exact Fantom Labs Stripe acct_1TFnGyBSWo9IPsgC. Created live HOODLABS Pro product prod_hoodlabs_pro with HOODLABS URL. Dedicated portal bpc_1UDxZCBSWo9IPsgCDQGAA4YZ created (cancel at period end). Currency for $6.90/month is pending user answer US/AU; no price/customer subscription/charge created. No business Stripe/Supabase/Pinata credentials configured.
 
-Live launching defaultsdisabled; Probilling unavailableuntil businessSupabase/Stripe/Pinata config and chosenprice. User approves separate subdomain, productnameHoodlaunch. Qualified financial release, liveproviderconfiguration checks, protectedpreview and domainbinding remain outstanding.
+Vercel authenticated, separate protected project hoodlabs prj_31KjKSCKY4OQipMAihFMr5kWbO88 in tx-build. No deployment yet. Added verified domain launch.hoodrich.rip; DNS missing at Porkbun, expected CNAME launch -> cf16a299adaf2efb.vercel-dns-016.com. Nonsecret env APP_ORIGIN, LIVE_LAUNCH_ENABLED=false and dedicated portal ID set. Main hood-rich untouched. GitHub empty target push authorized and available, no push yet.
+
+Next: integrate repairs, exact candidate tests/types/build/secret scan/browser + independent gates, push and protected preview deploy. Complete concrete reviewable preview before requesting missing business credentials/qualified financial release. Preserve pending currency question; do not invent currency. Unknown agent token usage, no cost-savings claims.

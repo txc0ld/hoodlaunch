@@ -26,12 +26,13 @@ Set these in the **new** Vercel project's environment settings. Never prefix cre
 | `SUPABASE_SERVICE_ROLE_KEY` | Server-only database access for revocable sessions, billing mapping and quotas. |
 | `STRIPE_SECRET_KEY` | Business Stripe API key, from the same account and mode as the Pro price. Never use the operator's exchange or wallet keys. |
 | `STRIPE_PRO_PRICE_ID` | Verified active recurring HOODLABS Pro price, monthly, 690 minor currency units. |
+| `STRIPE_PORTAL_CONFIGURATION_ID` | Dedicated HOODLABS billing portal configuration; live catalog ID `bpc_1UDxZCBSWo9IPsgCDQGAA4YZ`. Use a separate test configuration for test-mode checks. |
 | `STRIPE_WEBHOOK_SECRET` | Signing secret for this deployment's Stripe webhook endpoint. |
 | `PINATA_JWT` | New business-scoped upload credential; do not copy the owner's existing personal token. |
 
 Use separate test and live provider configuration. Run `db/001_public_services.sql` once against the new Supabase project after verifying its target. Enable email OTP with a code-bearing template, configured SMTP and appropriate provider send limits. Schedule the expired session/quota cleanup described in the migration. Test anonymous/authenticated roles cannot read service tables.
 
-Configure Stripe's customer billing portal to allow payment-method updates and subscription cancellation. The application must use a portal configuration whose cancellation policy matches the terms shown to customers. Register `/api/stripe-webhook` for subscription and Checkout lifecycle events. The endpoint checks signatures; actual Pro authorization comes from an active, exact-price Stripe subscription, not a redirect or webhook claim.
+A dedicated live HOODLABS portal configuration has been created with payment-method updates, invoice history and cancellation at the end of the paid billing period. The application must use a portal configuration whose cancellation policy matches the terms shown to customers. Register `/api/stripe-webhook` for subscription and Checkout lifecycle events. The endpoint checks signatures; actual Pro authorization comes from an active, exact-price Stripe subscription, not a redirect or webhook claim.
 
 ## Source and deployment checks
 

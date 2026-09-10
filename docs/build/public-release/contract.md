@@ -1,6 +1,6 @@
-# Hoodlaunch public release contract
+# HOODLABS public release contract
 
-Base: 1938b724840e883cf362c725f5728e9d1bb633d4 (sanitized local snapshot; no owner history). Upstream local app remains untouched. Target GitHub txc0ld/hoodlaunch; Vercel tx-build/hood-rich. Domain mapping pending; existing www.hoodrich.rip must remain live until explicitly chosen. Monetization: free launchpad plus paid Pro services; no invented price, no live payment or chain execution in testing.
+Base: 1938b724840e883cf362c725f5728e9d1bb633d4 (sanitized local snapshot; no owner history). Upstream local app remains untouched. Target GitHub txc0ld/hoodlaunch; Vercel tx-build/hoodlabs, separate from hood-rich. Target launch.hoodrich.rip; existing www.hoodrich.rip must remain live. Monetization: free launchpad plus paid Pro services; user-requested $6.90/month, currency pending; no live payment or chain execution in testing.
 
 ## Scope and ownership
 Root owns integration, dependencies/lockfile, deployment configuration, CSP, source allowlist, reports. Critical owner owns audited launch verification/recovery, node session lifecycle and bridge reconciliation in isolated core checkout. Complex owner owns server account/billing/upload service and Pro account UI in isolated services checkout. One writer per checkout, no child delegation. Integrate patches only from approved allowed paths.
