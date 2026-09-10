@@ -1,23 +1,17 @@
-.panel { min-width: 0; margin: 0; padding: 18px; border: 1px solid #33453b; border-radius: 12px; background: #111a15; color: #f2f7f3; }
-.panel legend { padding: 0 7px; font-weight: 700; }
-.free { margin-left: 7px; color: #b6f7a2; font-size: .75rem; }
-.options { display: flex; flex-wrap: wrap; gap: 16px; }
-.options label { display: flex; align-items: center; gap: 7px; min-height: 44px; cursor: pointer; }
-.panel input[type="radio"] { accent-color: #b6f7a2; }
-.inputLabel { display: grid; gap: 8px; margin-top: 18px; }
-.inputLabel input { box-sizing: border-box; width: 100%; min-width: 0; padding: 12px; border: 1px solid #687a6e; border-radius: 8px; background: #0b120e; color: #f2f7f3; font: inherit; }
-.panel input:focus-visible { outline: 2px solid #b6f7a2; outline-offset: 3px; }
-.panel p { margin: 12px 0 0; color: #c2cec6; font-size: .85rem; line-height: 1.6; }
-.panel .error { color: #ffb7af; }
-.metadata { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 2fr); gap: 9px 12px; margin-bottom: 0; font-size: .85rem; }
-.metadata dt { color: #c2cec6; }
-.metadata dd { margin: 0; overflow-wrap: anywhere; }
-.address { font-family: monospace; }
-@media (max-width: 560px) { .metadata { grid-template-columns: 1fr; gap: 5px; } .metadata dd { margin-bottom: 8px; } }
-
-.retry { min-height:44px; padding:8px 14px; margin-top:12px; color:#c7ff48; background:#101812; border:1px solid #657c4b; border-radius:4px; cursor:pointer; }
-.retry:focus-visible { outline:2px solid #efffd1; outline-offset:3px; }
-
-.panel{border-color:#555a4c;border-radius:0;background:#11130f}.panel legend{font-family:"Anton","Arial Narrow",sans-serif;font-size:22px;font-weight:400;text-transform:uppercase}.free{color:#ccff00}.panel input[type="radio"]{accent-color:#ccff00}.inputLabel input{min-height:48px;border-color:#4b5044;border-radius:0;background:#171914;font-size:16px}.panel input:focus-visible{outline:3px solid #ccff00}.retry{border:2px solid #ccff00;border-radius:0;color:#0a0a0a;background:#ccff00;font-weight:700;box-shadow:3px 3px 0 #f3f3ec}
-
-.panel{position:relative;border-color:#686d5f;border-left:6px solid #ccff00;background:repeating-linear-gradient(96deg,transparent 0 72px,rgba(255,255,255,.018) 73px 74px),#11130f;box-shadow:6px 6px 0 #050505}.panel::after{content:"PAIR INPUT";position:absolute;top:-10px;right:14px;padding:5px 8px;background:#ded7c2;color:#11120f;font:800 8px/1 "Space Grotesk",sans-serif;letter-spacing:.1em;transform:rotate(1deg)}
+.panel { min-width:0; margin:0; padding:20px; border:1px solid #28313c; border-radius:14px; background:#0e1117; color:#f4f7fa; }
+.panel legend { padding:0 8px; font-size:18px; font-weight:500; }
+.free { margin-left:7px; color:#b9ddf4; font-size:.75rem; }
+.options { display:flex; flex-wrap:wrap; gap:10px 22px; }
+.options label { min-height:44px; display:flex; align-items:center; gap:8px; cursor:pointer; }
+.panel input[type="radio"] { accent-color:#91c7e8; }
+.inputLabel { display:grid; gap:8px; margin-top:18px; color:#c5ced7; font-size:14px; }
+.inputLabel input { box-sizing:border-box; width:100%; min-width:0; min-height:48px; padding:0 14px; border:1px solid #344252; border-radius:12px; background:#090c11; color:#f4f7fa; font:inherit; }
+.panel input:focus-visible,.retry:focus-visible { outline:2px solid #b9ddf4; outline-offset:3px; }
+.panel p { margin:12px 0 0; color:#aab4c0; font-size:.875rem; line-height:1.6; }
+.panel .error { color:#ffb8ac; }
+.metadata { display:grid; grid-template-columns:minmax(100px,1fr) minmax(0,2fr); gap:9px 12px; margin-bottom:0; font-size:.875rem; }
+.metadata dt { color:#aab4c0; }
+.metadata dd { margin:0; overflow-wrap:anywhere; }
+.address { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+.retry { min-height:44px; margin-top:12px; padding:8px 15px; border:1px solid #52758d; border-radius:10px; background:rgba(185,221,244,.08); color:#d7edfa; font:inherit; font-weight:500; cursor:pointer; }
+@media(max-width:560px){.metadata{grid-template-columns:1fr;gap:5px}.metadata dd{margin-bottom:8px}.inputLabel input{font-size:16px}}

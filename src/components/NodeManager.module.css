@@ -1,105 +1,47 @@
-.manager { width: min(980px, 100%); margin: 0 auto 18px; overflow: hidden; border: 1px solid #363833; border-radius: 20px; background: #161715; box-shadow: 0 18px 50px rgba(0,0,0,.24); }
-.managerToggle { width: 100%; min-height: 82px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 17px 23px; border: 0; background: transparent; color: #f2f3ee; text-align: left; cursor: pointer; }
-.managerToggle:hover { background: #1b1c1a; }
-.managerToggle:focus-visible, .primaryButton:focus-visible, .secondaryButton:focus-visible, .controls input:focus, .restoreBox input:focus, .fundingControls input:focus, .keystoreBox input:focus, .keystoreBox select:focus { outline: none; border-color: #bdf641; box-shadow: 0 0 0 3px rgba(189,246,65,.14); }
-.managerToggle > span:first-child { display: grid; gap: 4px; }
-.managerToggle strong { font-size: 16px; }
-.managerToggle small { color: #85887f; font-size: 11px; line-height: 1.4; }
-.eyebrow { color: #bdf641; font-size: 9px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
-.chevron, .chevronOpen { color: #a6a99f; font-size: 24px; transition: transform 150ms ease; }
-.chevronOpen { transform: rotate(180deg); }
-.panel { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid #30322e; }
-.step { min-width: 0; padding: 25px 23px 27px; }
-.step + .step { border-left: 1px solid #30322e; }
-.stepHeading { display: flex; align-items: flex-start; gap: 11px; margin-bottom: 20px; }
-.stepHeading > span { width: 25px; height: 25px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 8px; background: #bdf641; color: #11130d; font-size: 12px; font-weight: 850; }
-.stepHeading h2 { margin: 1px 0 5px; color: #f1f2ed; font-size: 15px; letter-spacing: -.01em; }
-.stepHeading p, .notice p { margin: 0; color: #868980; font-size: 11px; line-height: 1.5; }
-.controls { display: grid; grid-template-columns: 90px minmax(0,1fr); gap: 10px; }
-.controls label, .fundingControls label { display: grid; gap: 6px; color: #a9aca3; font-size: 10px; font-weight: 700; }
-.controls input, .restoreBox input, .fundingControls input, .keystoreBox input, .keystoreBox select { width: 100%; height: 42px; border: 1px solid #393b36; border-radius: 11px; padding: 0 12px; outline: none; background: #20211f; color: #f0f1ec; }
-.controls .primaryButton { grid-column: 1 / -1; }
-.primaryButton, .secondaryButton { min-height: 42px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 11px; padding: 0 14px; font-size: 11px; font-weight: 800; cursor: pointer; }
-.primaryButton { color: #10120d; background: #bdf641; }
-.secondaryButton { color: #e9ebe5; background: #232522; border-color: #3b3d38; }
-.primaryButton:disabled, .secondaryButton:disabled { opacity: .5; cursor: not-allowed; }
-.confirm { display: flex; align-items: flex-start; gap: 8px; margin-top: 11px; color: #9da096; font-size: 10px; line-height: 1.45; }
-.confirm input { flex: 0 0 auto; accent-color: #bdf641; }
-.restoreBox, .keystoreBox { display: grid; grid-template-columns: 1.1fr 1fr; gap: 9px; margin-top: 17px; padding: 13px; border: 1px solid #343631; border-radius: 13px; background: #1c1d1b; }
-.restoreBox > div, .keystoreBox > div { grid-column: 1 / -1; display: grid; gap: 3px; color: #e1e3dc; font-size: 11px; }
-.restoreBox small, .keystoreBox small { color: #777a72; font-size: 9px; font-weight: 500; line-height: 1.45; }
-.restoreBox input[type=file] { padding: 9px; color: #9b9e95; font-size: 9px; }
-.restoreBox input[type=file]::file-selector-button { border: 0; border-radius: 6px; margin-right: 7px; padding: 4px 6px; background: #30322d; color: #e9ebe5; }
-.progress { position: relative; height: 27px; overflow: hidden; margin-top: 11px; border-radius: 8px; background: #22241f; }
-.progress > span { position: absolute; inset: 0 auto 0 0; background: rgba(189,246,65,.17); transition: width 100ms ease; }
-.progress small { position: relative; height: 100%; display: flex; align-items: center; padding: 0 9px; color: #cdd2c3; font-size: 9px; }
-.alert { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 13px; padding: 10px 11px; border: 1px solid rgba(255,143,112,.3); border-radius: 10px; background: rgba(255,143,112,.07); color: #f3b4a3; font-size: 10px; line-height: 1.4; }
-.alert button { flex: 0 0 auto; padding: 0; border: 0; background: transparent; color: #d9ff83; font-weight: 750; cursor: pointer; }
-.sessionStatus { display: flex; align-items: flex-start; gap: 9px; margin-top: 15px; padding: 11px; border: 1px solid rgba(255,180,90,.25); border-radius: 11px; background: rgba(255,180,90,.05); }
-.sessionStatus > span { width: 19px; height: 19px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; background: #d99b4e; color: #111; font-size: 10px; font-weight: 900; }
-.sessionStatus div { display: grid; gap: 3px; color: #e5e0d7; font-size: 10px; }
-.sessionStatus small { color: #898b84; font-size: 9px; line-height: 1.4; }
-.verified { border-color: rgba(189,246,65,.24); background: rgba(189,246,65,.05); }
-.verified > span { background: #bdf641; }
-.locked { background: #131412; }
-.lockMessage { margin: 0; padding: 14px; border: 1px dashed #353732; border-radius: 12px; color: #85887f; font-size: 11px; text-align: center; }
-.notice { margin-bottom: 15px; padding: 13px; border: 1px solid rgba(189,246,65,.2); border-radius: 12px; background: rgba(189,246,65,.045); }
-.notice strong { color: #e8ebdf; font-size: 11px; }
-.notice p { margin-top: 5px; }
-.noticeLinks { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 9px; }
-.notice a { color: #d9ff83; font-size: 10px; font-weight: 750; text-decoration: none; }
-.notice > small { display: block; margin-top: 10px; color: #777a72; font-size: 9px; line-height: 1.45; }
-.fundingControls { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
-.fundingControls label { grid-column: 1 / -1; }
-.fieldError { margin: 8px 0 0; color: #ff9d84; font-size: 9px; }
-.copyStatus { margin: 8px 0 0; color: #bdf641; font-size: 9px; }
-.walletList { display: grid; gap: 7px; max-height: 262px; overflow-y: auto; margin-top: 15px; padding-right: 3px; }
-.walletRow { display: grid; grid-template-columns: 1.2fr 1fr 1fr auto; align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid #32342f; border-radius: 10px; background: #1d1e1c; }
-.walletRow div { min-width: 0; display: grid; gap: 3px; }
-.walletRow span { color: #74776f; font-size: 8px; text-transform: uppercase; letter-spacing: .05em; }
-.walletRow code, .walletRow strong { overflow: hidden; color: #e5e7e1; font-family: inherit; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.walletRow em { padding: 4px 6px; border-radius: 999px; font-size: 8px; font-style: normal; font-weight: 800; white-space: nowrap; }
-.met { background: rgba(189,246,65,.13); color: #cfff64; }
-.pending { background: #2b2d29; color: #999c94; }
-.rowCopy { grid-column: 1 / -1; justify-self: start; padding: 0; border: 0; background: transparent; color: #d9ff83; font-size: 8px; font-weight: 750; cursor: pointer; }
-.rowCopy:focus-visible { outline: 2px solid #bdf641; outline-offset: 3px; }
-.snapshot { margin: 10px 0 0; color: #71746c; font-size: 9px; line-height: 1.45; }
-.chainHeading { display: grid; gap: 4px; margin: 1px 0 13px; }
-.chainHeading strong { color: #e8eae4; font-size: 12px; }
-.chainHeading small { color: #7f8279; font-size: 9px; line-height: 1.45; }
-.keystoreBox select { appearance: none; }
-
-@media (max-width: 820px) {
-  .panel { grid-template-columns: 1fr; }
-  .step + .step { border-top: 1px solid #30322e; border-left: 0; }
-}
-@media (max-width: 560px) {
-  .manager { border-radius: 17px; }
-  .managerToggle { padding: 15px 17px; }
-  .managerToggle small { max-width: 270px; }
-  .step { padding: 22px 16px; }
-  .controls, .restoreBox, .keystoreBox, .fundingControls { grid-template-columns: 1fr; }
-  .controls .primaryButton, .restoreBox > div, .keystoreBox > div, .fundingControls label { grid-column: auto; }
-  .walletRow { grid-template-columns: 1fr 1fr; }
-  .walletRow em { justify-self: start; }
-}
-@media (prefers-reduced-motion: reduce) { .chevron, .chevronOpen, .progress > span { transition: none; } }
-
-.fullAddress {
-  display: block;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.manager{width:min(1180px,calc(100% - 48px));border-color:#353b34;border-radius:3px;background:#121512;box-shadow:0 30px 80px rgba(0,0,0,.32)}
-.managerToggle{min-height:88px;padding:20px 28px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.managerToggle:hover{background:#171b17}.managerToggle small{color:#a0a79c}.panel,.step+.step{border-color:#343a33}.step{padding:30px 28px}.stepHeading>span{border-radius:50%;background:#c7ff48}.controls input,.restoreBox input,.fundingControls input,.keystoreBox input,.keystoreBox select{min-height:44px;border-radius:2px;background:#181b18}.primaryButton,.secondaryButton{min-height:44px;border-radius:2px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;text-transform:uppercase;letter-spacing:.05em}.primaryButton{background:#c7ff48}.restoreBox,.keystoreBox,.sessionStatus,.notice,.lockMessage,.walletRow{border-radius:2px}.walletRow{background:#181b18}
-@media(max-width:560px){.manager{width:calc(100% - 20px);border-radius:3px}}
-
-.manager{border:1px solid #555a4c;border-top:5px solid #ccff00;background:#11130f;box-shadow:8px 8px 0 #050505,8px 8px 0 1px #3d4136}.managerToggle{font-family:"Space Grotesk",sans-serif;font-size:13px}.stepHeading h3{font-family:"Anton","Arial Narrow",sans-serif;font-size:25px;font-weight:400;text-transform:uppercase}.stepHeading>span{border-radius:0;background:#ccff00}.eyebrow,.copyStatus,.notice a{color:#ccff00}.controls input,.restoreBox input,.fundingControls input,.keystoreBox input,.keystoreBox select{font-size:16px}.primaryButton,.secondaryButton{border-radius:0;font-family:"Space Grotesk",sans-serif;font-weight:700}.primaryButton{background:#ccff00;box-shadow:3px 3px 0 #f3f3ec}.managerToggle:focus-visible,.primaryButton:focus-visible,.secondaryButton:focus-visible,.controls input:focus,.restoreBox input:focus,.fundingControls input:focus,.keystoreBox input:focus,.keystoreBox select:focus{border-color:#ccff00;box-shadow:0 0 0 3px rgba(204,255,0,.16)}
-
-.manager{position:relative;border-color:#686d5f;border-top-width:8px;background:repeating-linear-gradient(96deg,transparent 0 86px,rgba(255,255,255,.018) 87px 88px),#11130f;box-shadow:10px 10px 0 #050505}
-.manager::after{content:"NODE BENCH / LOCAL KEYS";position:absolute;z-index:2;top:13px;right:18px;padding:6px 9px;background:#ded7c2;color:#11120f;font:800 8px/1 "Space Grotesk",sans-serif;letter-spacing:.11em;transform:rotate(1deg);pointer-events:none}
-.managerToggle{padding-right:190px}.panel{background:#10120f}.step{background:rgba(18,21,17,.88)}
-.restoreBox,.keystoreBox,.sessionStatus,.notice,.lockMessage,.walletRow{border-color:#505549;background:#171914}
-@media(max-width:620px){.manager{border-top-width:6px;box-shadow:6px 6px 0 #050505}.manager::after{display:none}.managerToggle{padding-right:17px}}
+.manager { width:min(1180px,calc(100% - 48px)); margin:28px auto; overflow:hidden; border:1px solid #28313c; border-radius:18px; background:#0e1117; box-shadow:0 26px 75px rgba(0,0,0,.22); color:#f4f7fa; }
+.managerToggle { width:100%; min-height:72px; display:flex; align-items:center; justify-content:space-between; gap:18px; padding:18px 24px; border:0; background:transparent; color:#f4f7fa; font:inherit; text-align:left; cursor:pointer; }
+.managerToggle>div { display:grid; gap:4px; }
+.managerToggle strong { font-size:18px; font-weight:500; }
+.managerToggle small { color:#aab4c0; font-size:12px; }
+.chevron { flex:0 0 auto; color:#8996a4; transition:transform 180ms ease; }
+.chevronOpen { transform:rotate(180deg); }
+.panel { display:grid; gap:16px; padding:24px; border-top:1px solid #28313c; }
+.eyebrow { margin:0; color:#b9ddf4; font-size:10px; font-weight:500; letter-spacing:.12em; text-transform:uppercase; }
+.chainHeading { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+.chainHeading h2,.stepHeading h3 { margin:3px 0 6px; font-weight:500; letter-spacing:-.025em; }
+.chainHeading p,.stepHeading p { margin:0; color:#aab4c0; font-size:12px; line-height:1.5; }
+.sessionStatus { flex:0 0 auto; padding:7px 10px; border:1px solid #344252; border-radius:999px; color:#c5ced7; background:#12161d; font-size:10px; }
+.controls,.fundingControls { display:flex; flex-wrap:wrap; align-items:end; gap:10px; }
+.primaryButton,.secondaryButton { min-height:44px; display:inline-flex; align-items:center; justify-content:center; padding:0 14px; border:1px solid #344252; border-radius:10px; background:#12161d; color:#f4f7fa; font:inherit; font-size:12px; font-weight:500; cursor:pointer; }
+.primaryButton { border-color:#b9ddf4; background:#b9ddf4; color:#071018; }
+.primaryButton:disabled,.secondaryButton:disabled { opacity:.5; cursor:not-allowed; }
+.managerToggle:focus-visible,.primaryButton:focus-visible,.secondaryButton:focus-visible,.rowCopy:focus-visible,.confirm input:focus-visible,.fundingControls input:focus-visible { outline:2px solid #b9ddf4; outline-offset:3px; }
+.notice,.alert,.lockMessage { margin:0; padding:12px 14px; border:1px solid #344252; border-radius:11px; background:#12161d; color:#b9c3ce; font-size:11px; line-height:1.5; }
+.alert { border-color:rgba(255,150,135,.35); background:rgba(255,120,100,.08); color:#ffc4bb; }
+.noticeLinks { display:flex; flex-wrap:wrap; gap:8px 18px; margin-top:8px; }
+.noticeLinks a { min-height:44px; display:inline-flex; align-items:center; color:#b9ddf4; }
+.step { display:grid; gap:14px; padding:18px; border:1px solid #28313c; border-radius:14px; background:#10141a; }
+.stepHeading { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; }
+.pending,.verified,.met { color:#b9ddf4; font-size:10px; font-weight:500; letter-spacing:.08em; text-transform:uppercase; }
+.met,.verified { color:#aee7d1; }
+.progress { height:4px; overflow:hidden; border-radius:999px; background:#202833; }
+.progress span { display:block; height:100%; border-radius:inherit; background:#91c7e8; transition:width 220ms ease; }
+.walletList { display:grid; gap:8px; }
+.walletRow { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:10px; padding:11px; border:1px solid #28313c; border-radius:10px; background:#0e1117; }
+.walletRow code,.fullAddress { overflow-wrap:anywhere; color:#d8e3ec; font-size:10px; }
+.rowCopy { min-width:44px; min-height:44px; border:1px solid #344252; border-radius:9px; background:#12161d; color:#dceefa; font:inherit; cursor:pointer; }
+.copyStatus { color:#aee7d1; font-size:10px; }
+.keystoreBox,.restoreBox { display:grid; gap:10px; padding:14px; border:1px solid #344252; border-radius:12px; background:#090c11; }
+.keystoreBox textarea,.restoreBox textarea,.fundingControls input { box-sizing:border-box; width:100%; min-height:48px; padding:12px 14px; border:1px solid #344252; border-radius:10px; background:#070a0e; color:#f4f7fa; font:inherit; resize:vertical; }
+.restoreBox textarea { min-height:110px; }
+.fundingControls label { flex:1 1 220px; display:grid; gap:6px; color:#aab4c0; font-size:12px; }
+.fieldError { margin:0; color:#ffb8ac; font-size:11px; }
+.confirm { display:flex; align-items:flex-start; gap:9px; color:#aab4c0; font-size:11px; line-height:1.5; }
+.confirm input { flex:0 0 auto; width:18px; height:18px; accent-color:#91c7e8; }
+.snapshot { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:0; }
+.snapshot div { min-width:0; padding:10px; border-radius:9px; background:#12161d; }
+.snapshot dt { color:#8996a4; font-size:9px; text-transform:uppercase; }
+.snapshot dd { margin:3px 0 0; overflow-wrap:anywhere; color:#eef3f7; font-size:11px; }
+.locked { opacity:.72; }
+@media(max-width:620px){.manager{width:calc(100% - 20px);border-radius:14px}.managerToggle,.panel{padding:18px}.chainHeading,.stepHeading{flex-direction:column}.walletRow{grid-template-columns:1fr auto}.snapshot{grid-template-columns:1fr}.fundingControls label{font-size:14px}.keystoreBox textarea,.restoreBox textarea,.fundingControls input{font-size:16px}}
+@media(prefers-reduced-motion:reduce){.chevron,.progress span{transition:none}}
