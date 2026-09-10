@@ -7,7 +7,15 @@ const PUBLIC_FALLBACK_HOST = 'hoodlabs.vercel.app';
 function canonicalRedirect(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const lastSegment = path.slice(path.lastIndexOf('/') + 1);
-  const acceptsHtml = request.headers.get('accept')?.split(',').some(value => value.split(';')[0].trim().toLowerCase() === 'text/html');
+  const acceptsHtml = request.headers.get('accept')?.split(',').some(value => {
+    const [mediaType, ...parameters] = value.split(';').map(part => part.trim());
+    if (mediaType.toLowerCase() !== 'text/html') return false;
+    const quality = parameters.filter(part => part.split('=')[0].trim().toLowerCase() === 'q');
+    if (quality.length === 0) return true;
+    if (quality.length !== 1) return false;
+    const weight = /^q\s*=\s*(0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/i.exec(quality[0]);
+    return Boolean(weight && Number(weight[1]) > 0);
+  });
   if (
     process.env.APP_ORIGIN !== CANONICAL_ORIGIN ||
     request.nextUrl.hostname !== PUBLIC_FALLBACK_HOST ||

@@ -106,6 +106,18 @@ test('API, static, non-HTML, non-document, and mutating requests never redirect'
   for (const input of cases) assert.equal(proxy(request(input)).kind, 'next', JSON.stringify(input));
 });
 
+test('HTML excluded by its quality weight or malformed weight is not a document redirect', () => {
+  const proxy = loadProxy();
+  for (const accept of [
+    'text/html;q=0, application/json', 'text/html;q=0.0, */*;q=1',
+    'text/html; Q = 0.000', 'text/html;q=invalid', 'text/html;q=1.1',
+    'text/html;q=0.5;q=1',
+  ]) assert.equal(proxy(request({ accept })).kind, 'next', accept);
+  for (const accept of ['text/html', 'text/html;q=0.1, application/json', 'TEXT/HTML; Q=1.000']) {
+    assert.equal(proxy(request({ accept })).kind, 'redirect', accept);
+  }
+});
+
 test('missing, malformed, noncanonical, and nonexact APP_ORIGIN values disable redirect', () => {
   const proxy = loadProxy();
   for (const value of [undefined, '', 'not-a-url', 'http://labs.hoodrich.rip', 'https://labs.hoodrich.rip/', 'https://evil.example']) {
