@@ -1,6 +1,6 @@
 .manager { width:min(1180px,calc(100% - 48px)); margin:28px auto; overflow:hidden; border:1px solid #28313c; border-radius:18px; background:#0e1117; box-shadow:0 26px 75px rgba(0,0,0,.22); color:#f4f7fa; }
 .managerToggle { width:100%; min-height:72px; display:flex; align-items:center; justify-content:space-between; gap:18px; padding:18px 24px; border:0; background:transparent; color:#f4f7fa; font:inherit; text-align:left; cursor:pointer; }
-.managerToggle>div { display:grid; gap:4px; }
+.managerToggle>span:first-child { display:grid; gap:4px; }
 .managerToggle strong { font-size:18px; font-weight:500; }
 .managerToggle small { color:#aab4c0; font-size:12px; }
 .chevron { flex:0 0 auto; color:#8996a4; transition:transform 180ms ease; }
@@ -8,7 +8,7 @@
 .panel { display:grid; gap:16px; padding:24px; border-top:1px solid #28313c; }
 .eyebrow { margin:0; color:#b9ddf4; font-size:10px; font-weight:500; letter-spacing:.12em; text-transform:uppercase; }
 .chainHeading { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
-.chainHeading h2,.stepHeading h3 { margin:3px 0 6px; font-weight:500; letter-spacing:-.025em; }
+.chainHeading h2,.stepHeading h2 { margin:3px 0 6px; font-weight:500; letter-spacing:-.025em; }
 .chainHeading p,.stepHeading p { margin:0; color:#aab4c0; font-size:12px; line-height:1.5; }
 .sessionStatus { flex:0 0 auto; padding:7px 10px; border:1px solid #344252; border-radius:999px; color:#c5ced7; background:#12161d; font-size:10px; }
 .controls,.fundingControls { display:flex; flex-wrap:wrap; align-items:end; gap:10px; }
@@ -20,28 +20,45 @@
 .alert { border-color:rgba(255,150,135,.35); background:rgba(255,120,100,.08); color:#ffc4bb; }
 .noticeLinks { display:flex; flex-wrap:wrap; gap:8px 18px; margin-top:8px; }
 .noticeLinks a { min-height:44px; display:inline-flex; align-items:center; color:#b9ddf4; }
-.step { display:grid; gap:14px; padding:18px; border:1px solid #28313c; border-radius:14px; background:#10141a; }
+.step { min-width:0; display:grid; gap:14px; padding:18px; border:1px solid #28313c; border-radius:14px; background:#10141a; }
 .stepHeading { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; }
 .pending,.verified,.met { color:#b9ddf4; font-size:10px; font-weight:500; letter-spacing:.08em; text-transform:uppercase; }
 .met,.verified { color:#aee7d1; }
-.progress { height:4px; overflow:hidden; border-radius:999px; background:#202833; }
-.progress span { display:block; height:100%; border-radius:inherit; background:#91c7e8; transition:width 220ms ease; }
+.progress { position:relative; min-height:36px; overflow:hidden; border-radius:10px; background:#202833; }
+.progress>span { position:absolute; inset:0 auto 0 0; height:100%; background:rgba(145,199,232,.22); transition:width 220ms ease; }
+.progress>small { position:relative; display:flex; align-items:center; min-height:36px; padding:8px 12px; color:#e0edf7; font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
 .walletList { display:grid; gap:8px; }
-.walletRow { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:10px; padding:11px; border:1px solid #28313c; border-radius:10px; background:#0e1117; }
+.walletRow { display:grid; grid-template-columns:minmax(0,1.3fr) repeat(2,minmax(0,1fr)) minmax(0,1fr) auto; align-items:center; gap:10px; padding:11px; border:1px solid #28313c; border-radius:10px; background:#0e1117; }
+.walletRow>div { min-width:0; display:grid; gap:5px; }
+.walletRow>div>span { color:#aab4c0; font-size:11px; }
+.walletRow strong { overflow-wrap:anywhere; font-size:13px; font-weight:500; }
+.fullAddress { display:block; margin:8px 0 14px; }
 .walletRow code,.fullAddress { overflow-wrap:anywhere; color:#d8e3ec; font-size:10px; }
 .rowCopy { min-width:44px; min-height:44px; border:1px solid #344252; border-radius:9px; background:#12161d; color:#dceefa; font:inherit; cursor:pointer; }
 .copyStatus { color:#aee7d1; font-size:10px; }
 .keystoreBox,.restoreBox { display:grid; gap:10px; padding:14px; border:1px solid #344252; border-radius:12px; background:#090c11; }
-.keystoreBox textarea,.restoreBox textarea,.fundingControls input { box-sizing:border-box; width:100%; min-height:48px; padding:12px 14px; border:1px solid #344252; border-radius:10px; background:#070a0e; color:#f4f7fa; font:inherit; resize:vertical; }
-.restoreBox textarea { min-height:110px; }
+.controls input,.restoreBox input,.keystoreBox input,.keystoreBox select,.fundingControls input { box-sizing:border-box; width:100%; min-height:48px; padding:12px 14px; border:1px solid #344252; border-radius:10px; background:#070a0e; color:#f4f7fa; font:inherit; font-size:16px; min-width:0; }
+.controls label { flex:1 1 180px; min-width:0; display:grid; gap:7px; color:#aab4c0; font-size:14px; }
+.controls label:first-child { flex:0 1 100px; }
+.controls>.primaryButton { flex:1 0 100%; }
+.keystoreBox>div,.restoreBox>div { display:grid; gap:6px; min-width:0; }
+.keystoreBox strong,.restoreBox strong { font-size:14px; font-weight:500; }
+.keystoreBox small,.restoreBox small { color:#aab4c0; font-size:12px; line-height:1.5; }
+.restoreBox input[type=file] { max-width:100%; padding:9px; font-size:13px; }
+.restoreBox input[type=file]::file-selector-button { min-height:28px; margin-right:8px; border:0; border-radius:6px; padding:4px 8px; background:#28313c; color:#e1ecf5; }
+.controls input:focus-visible,.restoreBox input:focus-visible,.keystoreBox input:focus-visible,.keystoreBox select:focus-visible { outline:2px solid #b9ddf4; outline-offset:3px; }
 .fundingControls label { flex:1 1 220px; display:grid; gap:6px; color:#aab4c0; font-size:12px; }
 .fieldError { margin:0; color:#ffb8ac; font-size:11px; }
 .confirm { display:flex; align-items:flex-start; gap:9px; color:#aab4c0; font-size:11px; line-height:1.5; }
 .confirm input { flex:0 0 auto; width:18px; height:18px; accent-color:#91c7e8; }
-.snapshot { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:0; }
-.snapshot div { min-width:0; padding:10px; border-radius:9px; background:#12161d; }
-.snapshot dt { color:#8996a4; font-size:9px; text-transform:uppercase; }
-.snapshot dd { margin:3px 0 0; overflow-wrap:anywhere; color:#eef3f7; font-size:11px; }
+.snapshot { margin:12px 0 0; color:#aab4c0; font-size:12px; line-height:1.7; overflow-wrap:anywhere; }
 .locked { opacity:.72; }
-@media(max-width:620px){.manager{width:calc(100% - 20px);border-radius:14px}.managerToggle,.panel{padding:18px}.chainHeading,.stepHeading{flex-direction:column}.walletRow{grid-template-columns:1fr auto}.snapshot{grid-template-columns:1fr}.fundingControls label{font-size:14px}.keystoreBox textarea,.restoreBox textarea,.fundingControls input{font-size:16px}}
+@media(max-width:620px){.manager{width:calc(100% - 20px);border-radius:14px}.managerToggle,.panel{padding:18px}.chainHeading,.stepHeading{flex-direction:column}.walletRow{grid-template-columns:1fr auto}.snapshot{grid-template-columns:1fr}.fundingControls label{font-size:14px}.controls input,.restoreBox input,.keystoreBox input,.keystoreBox select,.fundingControls input{font-size:16px}}
 @media(prefers-reduced-motion:reduce){.chevron,.progress span{transition:none}}
+
+.sessionStatus { display:flex; align-items:flex-start; gap:10px; border-radius:12px; white-space:normal; }
+.sessionStatus>div { display:grid; min-width:0; gap:5px; }
+.sessionStatus strong { font-size:14px; font-weight:500; line-height:1.5; }
+.sessionStatus small { font-size:12px; line-height:1.6; color:#aab4c0; letter-spacing:0; text-transform:none; }
+@media(max-width:900px){.walletRow{grid-template-columns:repeat(2,minmax(0,1fr))}.walletRow>div:first-child{grid-column:1/-1}.walletRow>.rowCopy{justify-self:end}}
+@media(max-width:620px){.controls label,.controls label:first-child{flex:1 0 100%}.step{padding:16px}.stepHeading h2{font-size:21px}.managerToggle>span:first-child{min-width:0}.managerToggle small{font-size:12px;line-height:1.5}}
