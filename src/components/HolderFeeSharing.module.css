@@ -1,0 +1,9 @@
+.panel { max-width: 1120px; margin: 24px auto; padding: 24px; border: 1px solid var(--border, #39352b); border-radius: 16px; background: var(--panel, #17150f); color: var(--text, #faf5df); }
+.panel h3 { margin: 0 0 12px; font-size: 22px; }
+.panel p { line-height: 1.6; }
+.panel code { display: block; overflow-wrap: anywhere; margin: 8px 0; }
+.panel button { padding: 12px 16px; border: 1px solid currentColor; border-radius: 8px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.panel button:disabled { opacity: .55; cursor: default; }
+.panel a { display: inline-block; margin-top: 16px; color: inherit; text-underline-offset: 4px; }
+.panel button:focus-visible, .panel a:focus-visible { outline: 3px solid #ffd84d; outline-offset: 4px; }
+@media (max-width: 600px) { .panel { margin: 16px; padding: 18px; } }

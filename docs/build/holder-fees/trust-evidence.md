@@ -1,0 +1,12 @@
+# Evidence and unresolved routing boundary
+
+Observed 2026-09-11. Source packet supplied by parent; public evidence retained in `tests/fixtures/pons-holder-fees-observed-runtime.json`. This manifest detects drift only; it is not source verification or an audit.
+
+- Official [PONS create page](https://www.ponsfamily.com/launchpad/create), client chunk `1q29li796navj.js`, module `972275`: `createFor(token)` on `0x70e95CC5f03DB2906081E7a8D16e4C4209291507`, wait, `distributorOf(token)`, then `transferCreatorFeeRecipient(token, distributor)` on PONS launch factory. Module exposes claims ABI but no distributor token/factory binding getter.
+- Official [PONS source at revision 19708080b3d97f76d38b57fe1657a7fad3ebf9f1](https://github.com/ponsdotdev/ponsfamily/tree/19708080b3d97f76d38b57fe1657a7fad3ebf9f1): launch factory `transferCreatorFeeRecipient` requires current recipient, not merely deployer. Protocol owner has a timelocked override. Parent’s source tree contained no distributor source.
+- Public RPC block `0x38c9901`: holder factory 130-byte EIP-1967 proxy runtime hash `0x84e98e202d35f69a0307b3a2de5c888c269a9302cc1600060622e7f86a4a2f45`; implementation `0xa5ce545942caed85267db00abbdba89dac675088`, 4,255 bytes, hash `0xe3e2046fb00442b36dbf67c78962d896303c3777f15589cd60a2e987ed00ad07`.
+- Implementation metadata CID `QmQxe4DpAPwjLuHFm8adESpztgpYi4nqoNZ2q1y8q5A1x5`: parent reports IPFS/dweb/Pinata timeouts, Sourcify implementation full/partial 404, explorer API Cloudflare 403. No challenge bypass attempted.
+
+Pinning observed proxy and implementation bytes does not establish source semantics, distributor identity or mutable dependency correctness. No guessed getters are called. The read-only result explicitly cannot confirm working holder payouts even when mapping and recipient match. The write boundary is always closed, including when `launchEnabled` is true. Holder-requested launches also fail closed.
+
+To reopen implementation: obtain and independently validate factory and distributor source/ABI, dependency initialization and mutability, token/factory binding, and upgrade authority. Review the trust manifest; implement exact-call simulation/estimation, durable two-step intent and canonical receipt reconciliation under the stated wallet/lifecycle invariants; run independent behavioral verification and fresh review. Only a qualified human release decision may authorize this R3 route. No production operation is authorized by this document.

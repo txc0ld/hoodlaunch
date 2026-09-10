@@ -21,6 +21,9 @@ import type { NodeSession } from "../lib/node-vault";
 import NodeManager from "./NodeManager";
 import NodeTrading from "./NodeTrading";
 import TokenLinks from "./TokenLinks";
+import HolderFeeSharing from "./HolderFeeSharing";
+import { holderFeeLaunchBlocker, holderFeeLaunchDraft, rememberHolderFeeIntent, preparedHolderFeeIntent, bindHolderFeeLaunch } from "../lib/pons-holder-fees";
+import type { HolderFeeLaunchBinding } from "../lib/pons-holder-fees";
 import LabHero from "./LabHero";
 import PairSelector from "./PairSelector";
 import TokenLab from "./TokenLab";
@@ -121,6 +124,8 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
   const [walletSelectionOpen, setWalletSelectionOpen] = useState(false);
   const walletRequest = useRef(0);
   const [draft, setDraft] = useState<LaunchDraft>(EMPTY_DRAFT);
+  const [holderFeesRequested, setHolderFeesRequested] = useState(false);
+  const [holderFeeBinding, setHolderFeeBinding] = useState<HolderFeeLaunchBinding | null>(null);
   const [pairAsset, setPairAsset] = useState<PairAsset | null>(null);
   const isCustomPair = draft.pairToken !== undefined && draft.pairToken !== constants.AddressZero;
   const pairLabel = isCustomPair ? pairAsset?.symbol || "Custom asset" : "ETH";
@@ -199,7 +204,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
 
   useEffect(() => { void loadProtocol(); void reloadWallet(false); },[loadProtocol,reloadWallet]);
   useEffect(() => {
-    invalidateReview();setReceipt(null);setTxHash("");setStoredOperation(null);setSubmitState("idle");
+    invalidateReview();setHolderFeeBinding(null);setReceipt(null);setTxHash("");setStoredOperation(null);setSubmitState("idle");
     if(!wallet)return;
     const read=()=>{
       try {const current=getLaunchOperation(wallet.account);setStoredOperation(current);setTxHash(current?.hash||"");if(current)setSubmitState("unknown");}
@@ -281,6 +286,8 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
   const exemptions = useMemo(() => exemptionText.split(/[\n,]/).map((value) => value.trim()).filter(Boolean), [exemptionText]);
 
   const validationError = useMemo(() => {
+    const holderBlocker = holderFeeLaunchBlocker(holderFeesRequested);
+    if (holderBlocker) return holderBlocker;
     if (!draft.name.trim()) return "Enter a token name.";
     if (draft.name.trim().length > 64) return "Token name must be 64 characters or fewer.";
     if (!draft.symbol.trim()) return "Enter a ticker.";
@@ -293,7 +300,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
     if (isCustomPair && (!utils.isAddress(draft.pairToken?.trim() || "") || !pairAsset || pairAsset.address.toLowerCase() !== draft.pairToken?.trim().toLowerCase())) return "Check an approved quote asset before reviewing the launch.";
     if (isCustomPair && Number(draft.developerBuyEth) !== 0) return "Custom pair launches require zero developer buy.";
     if (!/^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/.test(draft.developerBuyEth)) return "Developer buy must be a non-negative ETH amount with up to 18 decimals.";
-    if (draft.creatorFeeRecipient && !utils.isAddress(draft.creatorFeeRecipient)) return "Enter a valid fee recipient address.";
+    if (!holderFeesRequested && draft.creatorFeeRecipient && !utils.isAddress(draft.creatorFeeRecipient)) return "Enter a valid fee recipient address.";
     if (draft.creatorTaxBps < 0 || draft.creatorTaxBps > (protocol?.maxCreatorTaxBps ?? 0)) return `Creator tax must be between 0 and ${(protocol?.maxCreatorTaxBps ?? 0) / 100}%.`;
     if (draft.slippageBps < 0 || draft.slippageBps > 200) return "Slippage must be between 0% and 2%.";
     if (exemptions.length > 32) return "Use no more than 32 exemptions.";
@@ -303,7 +310,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
       if (value && !/^https:\/\//i.test(value)) return `${label} must start with https://.`;
     }
     return "";
-  }, [draft, exemptions, imageState, protocol, selectedConfig, isCustomPair, pairAsset]);
+  }, [draft, exemptions, imageState, protocol, selectedConfig, isCustomPair, pairAsset, holderFeesRequested]);
 
   const uploadImage = useCallback(async (file: File) => {
     if(!proEnabled)return;
@@ -384,13 +391,13 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
   }
 
   async function handlePrepare() {
-    if (!launchEnabled) return;
+    if (!launchEnabled || holderFeeLaunchBlocker(holderFeesRequested)) return;
     if (!wallet || validationError || !draft.logo.trim() || imageState === "uploading") return;
     if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) previousFocusRef.current = document.activeElement;
     const generation = prepareGeneration.current + 1;
     prepareGeneration.current = generation;
     const launchDraft = {
-      ...draft,
+      ...holderFeeLaunchDraft(draft, holderFeesRequested, wallet.account),
       name: draft.name.trim(),
       symbol: draft.symbol.trim().toUpperCase(),
       description: draft.description.trim(),
@@ -403,6 +410,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
     try {
       const next = await prepareLaunch(launchDraft, wallet);
       if (generation !== prepareGeneration.current) return;
+      rememberHolderFeeIntent(next, holderFeesRequested);
       setPrepared(next);
       setSubmitState("review");
     } catch (error) {
@@ -415,6 +423,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
   async function handleExecute() {
     if (!launchEnabled) return;
     if (!prepared || !wallet || submitState !== "review") return;
+    if (holderFeeLaunchBlocker(preparedHolderFeeIntent(prepared))) { setSubmitError(holderFeeLaunchBlocker(true)); return; }
     setSubmitState("submitting");
     setSubmitError("");
     const account=wallet.account;
@@ -425,6 +434,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
       },()=>{if(!enabledRef.current)throw new Error("Live launching is no longer enabled.");});
       if(walletRef.current?.account!==account)return;
       setReceipt(result);setTxHash(result.transactionHash);setStoredOperation(null);setSubmitState("success");
+      try { setHolderFeeBinding(bindHolderFeeLaunch(prepared, result)); } catch { setHolderFeeBinding(null); }
     }catch(error){
       if(walletRef.current?.account!==account)return;
       setSubmitError(errorMessage(error));
@@ -440,7 +450,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
     try {
       const checked=await recoverLaunch(account);
       if(walletRef.current?.account!==account)return;
-      if(checked.receipt){setReceipt(checked.receipt);setStoredOperation(null);setTxHash(checked.receipt.transactionHash);setSubmitState("success");}
+      if(checked.receipt){setHolderFeeBinding(null);setReceipt(checked.receipt);setStoredOperation(null);setTxHash(checked.receipt.transactionHash);setSubmitState("success");}
       else if(checked.operation.status==='reverted'){setStoredOperation(null);setSubmitState("error");setSubmitError("Launch reverted onchain. Gas was spent; you may prepare a fresh launch.");}
       else{setStoredOperation(checked.operation);setSubmitError(checked.operation.hash?"Waiting for two canonical confirmations. Do not resubmit.":"No transaction hash was returned. Export the recovery record and reconcile wallet activity; do not resubmit.");}
     }catch(error){if(walletRef.current?.account===account)setSubmitError(errorMessage(error));}
@@ -538,10 +548,12 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
 
           <label className={styles.field}><span>Developer buy <small>optional · ETH only</small></span><div className={styles.amountField}><input inputMode="decimal" disabled={isCustomPair} value={draft.developerBuyEth} onChange={(event) => updateDraft("developerBuyEth", event.target.value)} aria-label="Developer buy in ETH" /><strong>ETH</strong></div><small>{isCustomPair ? "Zero for custom quote assets. After launch, use PONS to buy with the selected asset; ETH still pays gas." : "Bought in the launch transaction. Network gas is additional."}</small></label>
 
+          <label className={styles.checkField}><input type="checkbox" checked={holderFeesRequested} disabled={formBusy} onChange={(event) => { invalidateReview(); setHolderFeesRequested(event.target.checked); }} /><span><strong>Holder fee sharing <small>Free</small></strong><small>Send this token’s future creator fee share to its holders. Currently unavailable pending contract verification. Selecting this blocks launch preparation; turn it off to prepare a normal creator-fee launch.</small></span></label>
+
           <div className={styles.advancedBlock}>
             <button className={styles.advancedToggle} type="button" onClick={() => setAdvanced((value) => !value)} aria-expanded={advanced}><span>Advanced</span><span className={advanced ? styles.chevronOpen : ""}><Icon name="chevron" /></span></button>
             {advanced && <div className={styles.advancedFields}>
-              <label className={styles.field}><span>Fee recipient <small>defaults to connected wallet</small></span><input value={draft.creatorFeeRecipient} onChange={(event) => updateDraft("creatorFeeRecipient", event.target.value)} placeholder="0x…" autoComplete="off" /></label>
+              {!holderFeesRequested && <label className={styles.field}><span>Fee recipient <small>defaults to connected wallet</small></span><input value={draft.creatorFeeRecipient} onChange={(event) => updateDraft("creatorFeeRecipient", event.target.value)} placeholder="0x…" autoComplete="off" /></label>}
               <div className={styles.twoFields}>
                 <label className={styles.field}><span>Creator tax (%)</span><input type="number" min="0" max={(protocol?.maxCreatorTaxBps ?? 0) / 100} step="0.01" value={draft.creatorTaxBps / 100} onChange={(event) => updateDraft("creatorTaxBps", Math.round(Number(event.target.value || 0) * 100))} /></label>
                 <label className={styles.field}><span>Slippage (%)</span><input type="number" min="0" max="2" step="0.01" value={draft.slippageBps / 100} onChange={(event) => updateDraft("slippageBps", Math.round(Number(event.target.value || 0) * 100))} /></label>
@@ -586,7 +598,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
         </aside>
       </section>
 
-      {receipt && <TokenLinks address={receipt.tokenAddress} />}
+      {receipt && <><TokenLinks address={receipt.tokenAddress} /><HolderFeeSharing receipt={receipt} wallet={wallet} requested={holderFeeBinding?.transactionHash === receipt.transactionHash && holderFeeBinding.token === receipt.tokenAddress ? holderFeeBinding.requested : null} /></>}
       {receipt?.pairToken && <section id="custom-pair-trading" className={styles.pendingNotice} tabIndex={-1} aria-label="Custom pair trading">
         <strong>Your custom pair is ready on PONS.</strong><span>Quote asset: {receipt.pairToken}. Generated-node trading here supports native ETH pairs. Use PONS for this token’s buys and sells; keep Robinhood ETH for gas.</span>
         <a href={`https://www.ponsfamily.com/launchpad/${receipt.tokenAddress}`} target="_blank" rel="noopener noreferrer">Open this token on PONS →</a>
@@ -605,7 +617,8 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
             <div><dt>Token</dt><dd>{prepared.name} · ${prepared.symbol}</dd></div>
             <div><dt>Quote asset</dt><dd>{prepared.pair ? `${prepared.pair.symbol} · ${prepared.pair.address}` : "Native ETH"}</dd></div>
             {prepared.pair && <div><dt>Quote decimals</dt><dd>{prepared.pair.decimals}</dd></div>}
-            <div><dt>Fee recipient</dt><dd title={prepared.creatorFeeRecipient}>{shorten(prepared.creatorFeeRecipient, 10, 8)}</dd></div>
+            <div><dt>Holder fee sharing</dt><dd>{preparedHolderFeeIntent(prepared) ? "Requested · setup unavailable" : "Not selected"}</dd></div>
+            <div><dt>Initial fee recipient</dt><dd title={prepared.creatorFeeRecipient}>{shorten(prepared.creatorFeeRecipient, 10, 8)}</dd></div>
             <div><dt>Launch fee</dt><dd>{formatEth(prepared.launchFeeWei)} ETH</dd></div>
             <div><dt>Developer buy</dt><dd>{prepared.pair ? "None · buy separately on PONS" : `${formatEth(prepared.developerBuyWei)} ETH`}</dd></div>
             <div><dt>Total value</dt><dd>{formatEth(prepared.totalValueWei)} ETH</dd></div>
@@ -613,13 +626,14 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
             <div><dt>Minimum tokens out</dt><dd>{prepared.minTokensOut}</dd></div>
             <div><dt>Economics</dt><dd>{prepared.expectedEconomics}</dd></div>
           </dl>
+          {preparedHolderFeeIntent(prepared) && <p>Launching does not enable sharing. PONS holder setup requires up to two more wallet approvals and gas after launch. HOODLABS setup remains blocked pending contract verification; the launch wallet initially receives creator fees.</p>}
           <div className={styles.modalActions}><button type="button" className={styles.secondaryButton} onClick={invalidateReview}>Back to edit</button><button type="button" className={styles.primaryButton} onClick={handleExecute}>Confirm launch</button></div>
         </section>
       </div>}
 
       {["submitting", "pending"].includes(submitState) && <div className={styles.modalBackdrop}><section ref={modalRef} className={`${styles.modal} ${styles.statusModal}`} role="status" aria-live="polite" tabIndex={-1} onKeyDown={handleModalKeyDown}><span className={styles.largeSpinner}><Icon name="spinner" /></span><h2>{submitState === "submitting" ? "Confirm in wallet" : "Launch pending"}</h2><p>{submitState === "submitting" ? "Review and approve the launch transaction in your wallet." : "Your transaction was submitted. Keep this page open while it confirms."}</p>{txHash && <code>{txHash}</code>}</section></div>}
 
-      {receipt && submitState === "success" && <div className={styles.modalBackdrop} onMouseDown={(event) => { if (event.target === event.currentTarget) continueToNodeTrading(); }}><section ref={modalRef} className={`${styles.modal} ${styles.statusModal}`} role="dialog" aria-modal="true" aria-labelledby="success-title" tabIndex={-1} onKeyDown={handleModalKeyDown}><span className={styles.successIcon}><Icon name="check" /></span><p className={styles.eyebrow}>Verified onchain</p><h2 id="success-title">Token launched</h2><TokenLinks address={receipt.tokenAddress} /><p>Your token and bonding curve are live on PONS Mainnet.</p><dl className={styles.reviewList}><div><dt>Token</dt><dd><a href={`${PONS_EXPLORER}/address/${receipt.tokenAddress}`} target="_blank" rel="noreferrer">{shorten(receipt.tokenAddress, 10, 8)} <Icon name="external" /></a></dd></div><div><dt>Curve</dt><dd><a href={`${PONS_EXPLORER}/address/${receipt.curveAddress}`} target="_blank" rel="noreferrer">{shorten(receipt.curveAddress, 10, 8)} <Icon name="external" /></a></dd></div><div><dt>Transaction</dt><dd>{shorten(receipt.transactionHash, 10, 8)}</dd></div></dl><div className={styles.modalActions}><button className={styles.primaryButton} type="button" onClick={continueToNodeTrading}>{receipt.pairToken ? "Close launch receipt" : "Continue to node trading"}</button><a className={styles.secondaryButton} href={receipt.explorerUrl} target="_blank" rel="noreferrer">View verified transaction <Icon name="external" /></a></div></section></div>}
+      {receipt && submitState === "success" && <div className={styles.modalBackdrop} onMouseDown={(event) => { if (event.target === event.currentTarget) continueToNodeTrading(); }}><section ref={modalRef} className={`${styles.modal} ${styles.statusModal}`} role="dialog" aria-modal="true" aria-labelledby="success-title" tabIndex={-1} onKeyDown={handleModalKeyDown}><span className={styles.successIcon}><Icon name="check" /></span><p className={styles.eyebrow}>Verified onchain</p><h2 id="success-title">Token launched</h2><TokenLinks address={receipt.tokenAddress} /><p>Your token and bonding curve are live on PONS Mainnet.</p>{holderFeeBinding?.requested && <p>Holder sharing is still pending. No holder fee setup transaction has been requested.</p>}<dl className={styles.reviewList}><div><dt>Token</dt><dd><a href={`${PONS_EXPLORER}/address/${receipt.tokenAddress}`} target="_blank" rel="noreferrer">{shorten(receipt.tokenAddress, 10, 8)} <Icon name="external" /></a></dd></div><div><dt>Curve</dt><dd><a href={`${PONS_EXPLORER}/address/${receipt.curveAddress}`} target="_blank" rel="noreferrer">{shorten(receipt.curveAddress, 10, 8)} <Icon name="external" /></a></dd></div><div><dt>Transaction</dt><dd>{shorten(receipt.transactionHash, 10, 8)}</dd></div></dl><div className={styles.modalActions}><button className={styles.primaryButton} type="button" onClick={continueToNodeTrading}>{receipt.pairToken ? "Close launch receipt" : "Continue to node trading"}</button><a className={styles.secondaryButton} href={receipt.explorerUrl} target="_blank" rel="noreferrer">View verified transaction <Icon name="external" /></a></div></section></div>}
       {walletSelectionOpen && <WalletConnection onClose={() => setWalletSelectionOpen(false)} onConnected={() => { setWalletSelectionOpen(false); void reloadWallet(true); }} onMobileFallback={() => { setWalletSelectionOpen(false); setMobileWalletOpen(true); }} />}
       <MobileWalletConnect open={mobileWalletOpen} onClose={() => setMobileWalletOpen(false)} onProviderReady={handleConnect} />
     </main>
