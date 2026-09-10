@@ -1,5 +1,7 @@
+import { holderChallenge, verifyHolder, unlinkHolder } from '../../src/server/public-holder';
+import { EMPTY_PRO_ACCESS } from '../../src/lib/pro-access';
 import { billingPortal, subscriptionCheckout } from '../../src/server/public-checkout';
-import { account, accountConfigured, authClient, billingConfigured, customerFor, database, hasPro, stripeClient, takeQuota } from '../../src/server/public-services';
+import { account, accountConfigured, authClient, billingConfigured, customerFor, database, getProStatus, hasSubscription, stripeClient, takeQuota } from '../../src/server/public-services';
 import { digest, fail, jsonBody, origin, readToken, safeHandler, sessionCookie, sessionToken, writeGuard } from '../../src/server/public-security';
 
 export const config = { api: { bodyParser: false }, maxDuration: 60 };
@@ -8,10 +10,20 @@ export default safeHandler(async (req, res) => {
   const body = await jsonBody(req);
   const action = body.action;
   if (action === 'status') {
-    if (!accountConfigured()) { res.json({ configured: false, signedIn: false, pro: false, billing: false }); return; }
+    if (!accountConfigured()) { res.json(EMPTY_PRO_ACCESS); return; }
     const id = await account(req, false);
     if (id) await takeQuota(`status:${id}`, 180, 3600);
-    res.json({ configured: true, signedIn: Boolean(id), pro: id ? await hasPro(id) : false, billing: billingConfigured() }); return;
+    const token=readToken(req);
+    const status=id && token?await getProStatus(id,digest(token)):EMPTY_PRO_ACCESS;
+    res.json({...status, configured: true, signedIn: Boolean(id), billing: billingConfigured() }); return;
+  }
+  if (action === 'holder-challenge' || action === 'holder-verify' || action === 'holder-unlink') {
+    const id=(await account(req))!,token=readToken(req);if(!token)fail(401,'SIGN_IN','Sign in to verify holder access.');
+    await takeQuota(`${action}:${id}`,action==='holder-verify'?20:10,900);
+    const db=database(),session=digest(token);
+    if(action==='holder-challenge'){res.json(await holderChallenge(db,id,session,body.address));return;}
+    if(action==='holder-verify'){await verifyHolder(db,id,session,body.challengeId,body.signature);res.json({verified:true});return;}
+    await unlinkHolder(db,id,session);res.json({unlinked:true});return;
   }
   if (action === 'request-code' || action === 'verify-code') {
     database();
@@ -46,7 +58,7 @@ export default safeHandler(async (req, res) => {
     const stripe = stripeClient();
     const customer = await customerFor(id, action === 'checkout');
     if (!customer) fail(400, 'NO_BILLING', 'No subscription account exists yet.');
-    if (action === 'portal' || await hasPro(id)) {
+    if (action === 'portal' || await hasSubscription(id)) {
       res.json({ url: await billingPortal(stripe, customer, origin()) }); return;
     }
     res.json({ url: await subscriptionCheckout(database(), stripe, id, customer, process.env.STRIPE_PRO_PRICE_ID!, origin()) }); return;
