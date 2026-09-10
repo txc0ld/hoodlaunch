@@ -12,7 +12,7 @@ const inputs = [
  ['Fee recipient','Receives creator protocol payouts; defaults to the launch wallet. Verify the full address.'],
  ['Creator tax','Optional percentage within the current PONS cap. Disclose it clearly.'],
  ['Slippage','Maximum execution difference from the quote. HOODLABS caps launch and node-trade slippage at 2%.'],
- ['Buyback','Directs part of the creator fee share to PONS buybacks. Bought tokens lock for five years under PONS rules; this is not a burn or price guarantee.'],
+ ['Buyback','Directs part of the creator fee share to PONS buybacks. Bought tokens vest gradually over five years under PONS rules; this is not a burn or price guarantee.'],
  ['Tax exemptions','Addresses excluded from opening snipe protection. Choose them at creation; they do not change supply.'],
 ];
 
