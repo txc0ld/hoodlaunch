@@ -3,18 +3,18 @@
 .controls label { display:grid; gap:6px; color:#aab4c0; font-size:12px; font-weight:500; }
 .controls input { box-sizing:border-box; width:100%; min-height:44px; padding:0 12px; border:1px solid #344252; border-radius:10px; outline:none; background:#090c11; color:#f4f7fa; font:inherit; }
 .bridgeButton,.confirmButton,.secondaryButton { min-height:44px; display:inline-flex; align-items:center; justify-content:center; padding:0 14px; border:1px solid #344252; border-radius:10px; background:#12161d; color:#f4f7fa; font:inherit; font-size:12px; font-weight:500; cursor:pointer; }
-.bridgeButton { border-color:#52758d; background:rgba(185,221,244,.08); color:#dff1fb; }
-.confirmButton { border-color:#b9ddf4; background:#b9ddf4; color:#071018; }
-.controls input:focus-visible,.bridgeButton:focus-visible,.confirmButton:focus-visible,.secondaryButton:focus-visible,.alert button:focus-visible { outline:2px solid #b9ddf4; outline-offset:2px; }
+.bridgeButton { border-color:#52758d; background:rgba(204,255,102,.08); color:#dff1fb; }
+.confirmButton { border-color:#ccff66; background:#ccff66; color:#071018; }
+.controls input:focus-visible,.bridgeButton:focus-visible,.confirmButton:focus-visible,.secondaryButton:focus-visible,.alert button:focus-visible { outline:2px solid #ccff66; outline-offset:2px; }
 .bridgeButton:disabled,.confirmButton:disabled,.secondaryButton:disabled { opacity:.5; cursor:not-allowed; }
 .fieldError,.warning { margin:0; color:#ffb8ac; font-size:11px; line-height:1.45; }
 .alert { display:flex; align-items:center; justify-content:space-between; gap:9px; padding:10px 12px; border:1px solid rgba(255,150,135,.35); border-radius:10px; background:rgba(255,120,100,.08); color:#ffc4bb; font-size:11px; line-height:1.45; }
 .alert button { min-width:44px; min-height:44px; padding:0; border:0; background:transparent; color:#dceefa; font:inherit; cursor:pointer; }
 .review,.operation { display:grid; gap:10px; padding:14px; border:1px solid #344252; border-radius:12px; background:#0e1117; }
-.review { border-color:#456176; background:rgba(185,221,244,.035); }
+.review { border-color:#456176; background:rgba(204,255,102,.035); }
 .reviewHeading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .reviewHeading>div { display:grid; gap:3px; }
-.reviewHeading span,.operation>div>span { color:#b9ddf4; font-size:10px; font-weight:500; letter-spacing:.1em; text-transform:uppercase; }
+.reviewHeading span,.operation>div>span { color:#ccff66; font-size:10px; font-weight:500; letter-spacing:.1em; text-transform:uppercase; }
 .reviewHeading strong,.operation>div>strong { color:#f4f7fa; font-size:13px; font-weight:500; }
 .reviewHeading em { padding:5px 8px; border-radius:999px; font-size:10px; font-style:normal; font-weight:500; }
 .ready { background:rgba(118,203,171,.12); color:#aee7d1; }

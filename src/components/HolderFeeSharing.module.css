@@ -2,8 +2,8 @@
 .panel h3 { margin:0 0 12px; font-size:22px; font-weight:500; letter-spacing:-.02em; }
 .panel p { color:#aab4c0; line-height:1.6; }
 .panel code { display:block; overflow-wrap:anywhere; margin:8px 0; color:#d8e3ec; }
-.panel button { min-height:44px; padding:10px 16px; border:1px solid #52758d; border-radius:11px; background:rgba(185,221,244,.08); color:#e3f2fb; font:inherit; font-weight:500; cursor:pointer; }
+.panel button { min-height:44px; padding:10px 16px; border:1px solid #52758d; border-radius:11px; background:rgba(204,255,102,.08); color:#e3f2fb; font:inherit; font-weight:500; cursor:pointer; }
 .panel button:disabled { opacity:.55; cursor:not-allowed; }
-.panel a { min-height:44px; display:inline-flex; align-items:center; margin-top:12px; color:#b9ddf4; text-underline-offset:4px; }
-.panel button:focus-visible,.panel a:focus-visible { outline:2px solid #b9ddf4; outline-offset:4px; }
+.panel a { min-height:44px; display:inline-flex; align-items:center; margin-top:12px; color:#ccff66; text-underline-offset:4px; }
+.panel button:focus-visible,.panel a:focus-visible { outline:2px solid #ccff66; outline-offset:4px; }
 @media(max-width:600px){.panel{margin:16px 10px;padding:20px}}

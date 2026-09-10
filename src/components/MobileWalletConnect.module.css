@@ -2,17 +2,17 @@
 .dialog::backdrop { background:rgba(2,4,7,.82); backdrop-filter:blur(8px); }
 .dialog h2 { margin:6px 48px 12px 0; font-size:clamp(30px,7vw,40px); font-weight:500; line-height:1.05; letter-spacing:-.04em; }
 .dialog p { color:#aab4c0; line-height:1.6; }
-.eyebrow { margin:0; color:#b9ddf4!important; font-size:11px; font-weight:500; letter-spacing:.14em; text-transform:uppercase; }
+.eyebrow { margin:0; color:#ccff66!important; font-size:11px; font-weight:500; letter-spacing:.14em; text-transform:uppercase; }
 .close { position:absolute; top:14px; right:14px; min-width:44px; min-height:44px; border:1px solid #344252; border-radius:12px; background:#12161d; color:#f4f7fa; font-size:24px; cursor:pointer; }
 .primary,.manual button,.actions button { min-height:44px; display:inline-flex; align-items:center; justify-content:center; padding:0 16px; border:1px solid #344252; border-radius:12px; background:#12161d; color:#f4f7fa; font:inherit; font-weight:500; cursor:pointer; text-align:center; }
-.primary { width:100%; min-height:52px; margin:10px 0 18px; border-color:#b9ddf4; background:#b9ddf4; color:#071018; text-decoration:none; }
+.primary { width:100%; min-height:52px; margin:10px 0 18px; border-color:#ccff66; background:#ccff66; color:#071018; text-decoration:none; }
 .manual { padding:16px; border:1px solid #28313c; border-radius:14px; background:#090c11; }
 .manual p { margin:0 0 10px; }
 .manual code { display:block; margin-bottom:12px; color:#dce6ee; overflow-wrap:anywhere; user-select:all; }
 .manual button { width:100%; }
 .note { font-size:13px; }
 .error { color:#ffb8ac!important; }
-.status { color:#b9ddf4!important; }
+.status { color:#ccff66!important; }
 .actions { display:grid; grid-template-columns:1.4fr 1fr; gap:10px; margin-top:18px; }
-.dialog :focus-visible { outline:2px solid #b9ddf4; outline-offset:3px; }
+.dialog :focus-visible { outline:2px solid #ccff66; outline-offset:3px; }
 @media(max-width:420px){.dialog{width:calc(100% - 20px);padding:24px 18px;border-radius:14px}.actions{grid-template-columns:1fr}}

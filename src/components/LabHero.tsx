@@ -75,8 +75,9 @@ export default function LabHero() {
       </div>
       <div className={styles.copy}>
         <p className={styles.kicker}><span /> HOODLABS <i /> BUILT ON ROBINHOOD CHAIN</p>
-        <h1 id="lab-hero-title">Your next idea.<br /><span>Onchain.</span></h1>
-        <p className={styles.lede}>A considered space for token launches.<br />Plan clearly. Review the details. Make your move.</p>
+        <h1 id="lab-hero-title" aria-label="hoodlabs"><span className={styles.wordmark} aria-hidden="true">𝖍𝖔𝖔𝖉𝖑𝖆𝖇𝖘</span></h1>
+        <p className={styles.headline}>The hoodlab, advanced token launchpad.</p>
+        <p className={styles.lede}>built on PONS, for the HOOD</p>
         <div className={styles.actions}>
           <a className={styles.primaryAction} href="#launch">Start a launch <Arrow /></a>
           <a className={styles.secondaryAction} href="#pons-plan">Plan your launch <span aria-hidden="true">↗</span></a>

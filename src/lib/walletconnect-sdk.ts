@@ -29,7 +29,7 @@ async function getKit(): Promise<AppKit> {
       enableInjected: true, enableEIP6963: true, enableWalletConnect: true,
       enableWalletGuide: false, enableMobileFullScreen: true, allowUnsupportedChain: true,
       features: { analytics: false, email: false, socials: false, swaps: false, onramp: false, send: false, receive: false, history: false, pay: false, smartSessions: false, reownAuthentication: false, connectMethodsOrder: ['wallet'] },
-      themeMode: 'dark', themeVariables: { '--w3m-accent': '#d3fb4c', '--w3m-border-radius-master': '2px', '--w3m-font-family': 'Arial, sans-serif', '--w3m-z-index': 2000 },
+      themeMode: 'dark', themeVariables: { '--w3m-accent': '#ccff66', '--w3m-border-radius-master': '2px', '--w3m-font-family': 'Arial, sans-serif', '--w3m-z-index': 2000 },
     });
     await kit.ready();
     let previous: unknown;

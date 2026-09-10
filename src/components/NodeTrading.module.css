@@ -2,7 +2,7 @@
 .header { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; padding:28px; border-bottom:1px solid #28313c; }
 .header h2 { margin:3px 0 7px; font-size:clamp(26px,3vw,36px); font-weight:500; letter-spacing:-.04em; }
 .header p { margin:0; color:#aab4c0; font-size:13px; line-height:1.55; }
-.eyebrow { color:#b9ddf4; font-size:10px; font-weight:500; letter-spacing:.12em; text-transform:uppercase; }
+.eyebrow { color:#ccff66; font-size:10px; font-weight:500; letter-spacing:.12em; text-transform:uppercase; }
 .chainBadge { flex:0 0 auto; padding:7px 10px; border:1px solid #344252; border-radius:999px; color:#c4d0da; background:#12161d; font-size:10px; }
 .body { display:grid; gap:14px; padding:28px; }
 .locked,.empty { margin:0; padding:17px; border:1px dashed #344252; border-radius:12px; color:#aab4c0; font-size:12px; text-align:center; }
@@ -10,8 +10,8 @@
 .tokenPicker label,.customTrade label { display:grid; gap:6px; color:#aab4c0; font-size:12px; font-weight:500; }
 .tokenPicker input,.customTrade input { box-sizing:border-box; width:100%; min-width:0; min-height:44px; padding:0 12px; border:1px solid #344252; border-radius:10px; outline:none; background:#090c11; color:#f4f7fa; font:inherit; }
 .primaryButton,.secondaryButton,.confirmButton,.tradeButtons button { min-height:44px; display:inline-flex; align-items:center; justify-content:center; padding:0 14px; border:1px solid #344252; border-radius:10px; background:#12161d; color:#f4f7fa; font:inherit; font-size:11px; font-weight:500; cursor:pointer; }
-.primaryButton,.confirmButton { border-color:#b9ddf4; background:#b9ddf4; color:#071018; }
-.tokenPicker input:focus-visible,.customTrade input:focus-visible,.primaryButton:focus-visible,.secondaryButton:focus-visible,.tradeButtons button:focus-visible,.confirmButton:focus-visible,.confirm input:focus-visible { outline:2px solid #b9ddf4; outline-offset:2px; }
+.primaryButton,.confirmButton { border-color:#ccff66; background:#ccff66; color:#071018; }
+.tokenPicker input:focus-visible,.customTrade input:focus-visible,.primaryButton:focus-visible,.secondaryButton:focus-visible,.tradeButtons button:focus-visible,.confirmButton:focus-visible,.confirm input:focus-visible { outline:2px solid #ccff66; outline-offset:2px; }
 .primaryButton:disabled,.secondaryButton:disabled,.confirmButton:disabled,.tradeButtons button:disabled { opacity:.5; cursor:not-allowed; }
 .alert { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:11px 12px; border:1px solid rgba(255,150,135,.35); border-radius:10px; background:rgba(255,120,100,.08); color:#ffc4bb; font-size:11px; line-height:1.45; }
 .alert button { min-width:44px; min-height:44px; padding:0; border:0; background:transparent; color:#dceefa; font:inherit; font-weight:500; cursor:pointer; }
@@ -20,16 +20,16 @@
 .tokenSummary dt,.metrics dt,.reviewDetails dt,.operation dt { color:#8996a4; font-size:9px; letter-spacing:.04em; text-transform:uppercase; }
 .tokenSummary dd,.metrics dd,.reviewDetails dd,.operation dd { margin:3px 0 0; color:#eef3f7; font-size:11px; font-weight:500; overflow-wrap:anywhere; }
 .tokenAddress { grid-column:1/-1; }
-.phase { margin:0; padding:10px 12px; border:1px solid #344252; border-radius:10px; background:rgba(185,221,244,.04); color:#c5ced7; font-size:11px; }
+.phase { margin:0; padding:10px 12px; border:1px solid #344252; border-radius:10px; background:rgba(204,255,102,.04); color:#c5ced7; font-size:11px; }
 .nodes { display:grid; gap:10px; }
-.bulkToolbar { display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:14px; border:1px solid #456176; border-radius:12px; background:rgba(185,221,244,.045); }
+.bulkToolbar { display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:14px; border:1px solid #456176; border-radius:12px; background:rgba(204,255,102,.045); }
 .bulkToolbar>div { flex:1 1 220px; }
 .bulkToolbar strong { color:#eef3f7; font-size:13px; }
 .bulkToolbar p { margin:4px 0 0; color:#aab4c0; font-size:11px; }
 .node { display:grid; gap:12px; padding:14px; border:1px solid #28313c; border-radius:12px; background:#10141a; }
 .nodeHeader { display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .nodeHeader>div { min-width:0; display:grid; gap:3px; }
-.nodeHeader span { color:#b9ddf4; font-size:9px; font-weight:500; letter-spacing:.09em; text-transform:uppercase; }
+.nodeHeader span { color:#ccff66; font-size:9px; font-weight:500; letter-spacing:.09em; text-transform:uppercase; }
 .nodeHeader code { overflow:hidden; color:#eef3f7; font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
 .metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; margin:0; }
 .tradeGroups { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
@@ -38,11 +38,11 @@
 .tradeButtons { display:grid; grid-template-columns:repeat(5,1fr); gap:6px; }
 .tradeButtons button { min-width:0; padding:0 6px; font-size:10px; }
 .customTrade { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; align-items:end; }
-.review,.operation { display:grid; gap:12px; padding:14px; border:1px solid #456176; border-radius:12px; background:rgba(185,221,244,.035); }
+.review,.operation { display:grid; gap:12px; padding:14px; border:1px solid #456176; border-radius:12px; background:rgba(204,255,102,.035); }
 .reviewHeading { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
 .reviewHeading>div { display:grid; gap:3px; }
 .reviewHeading h3 { margin:0; color:#f4f7fa; font-size:15px; font-weight:500; }
-.reviewHeading em { padding:5px 8px; border-radius:999px; background:rgba(185,221,244,.12); color:#d8effd; font-size:9px; font-style:normal; font-weight:500; }
+.reviewHeading em { padding:5px 8px; border-radius:999px; background:rgba(204,255,102,.12); color:#d8effd; font-size:9px; font-style:normal; font-weight:500; }
 .fullAddress { padding:9px; border-radius:8px; background:#090c11; color:#d7edfa; font-size:10px; overflow-wrap:anywhere; }
 .reviewDetails { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin:0; }
 .confirm { display:flex; align-items:flex-start; gap:9px; color:#aab4c0; font-size:11px; line-height:1.5; }

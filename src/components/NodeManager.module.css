@@ -6,23 +6,23 @@
 .chevron { flex:0 0 auto; color:#8996a4; transition:transform 180ms ease; }
 .chevronOpen { transform:rotate(180deg); }
 .panel { display:grid; gap:16px; padding:24px; border-top:1px solid #28313c; }
-.eyebrow { margin:0; color:#b9ddf4; font-size:10px; font-weight:500; letter-spacing:.12em; text-transform:uppercase; }
+.eyebrow { margin:0; color:#ccff66; font-size:10px; font-weight:500; letter-spacing:.12em; text-transform:uppercase; }
 .chainHeading { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
 .chainHeading h2,.stepHeading h2 { margin:3px 0 6px; font-weight:500; letter-spacing:-.025em; }
 .chainHeading p,.stepHeading p { margin:0; color:#aab4c0; font-size:12px; line-height:1.5; }
 .sessionStatus { flex:0 0 auto; padding:7px 10px; border:1px solid #344252; border-radius:999px; color:#c5ced7; background:#12161d; font-size:10px; }
 .controls,.fundingControls { display:flex; flex-wrap:wrap; align-items:end; gap:10px; }
 .primaryButton,.secondaryButton { min-height:44px; display:inline-flex; align-items:center; justify-content:center; padding:0 14px; border:1px solid #344252; border-radius:10px; background:#12161d; color:#f4f7fa; font:inherit; font-size:12px; font-weight:500; cursor:pointer; }
-.primaryButton { border-color:#b9ddf4; background:#b9ddf4; color:#071018; }
+.primaryButton { border-color:#ccff66; background:#ccff66; color:#071018; }
 .primaryButton:disabled,.secondaryButton:disabled { opacity:.5; cursor:not-allowed; }
-.managerToggle:focus-visible,.primaryButton:focus-visible,.secondaryButton:focus-visible,.rowCopy:focus-visible,.confirm input:focus-visible,.fundingControls input:focus-visible { outline:2px solid #b9ddf4; outline-offset:3px; }
+.managerToggle:focus-visible,.primaryButton:focus-visible,.secondaryButton:focus-visible,.rowCopy:focus-visible,.confirm input:focus-visible,.fundingControls input:focus-visible { outline:2px solid #ccff66; outline-offset:3px; }
 .notice,.alert,.lockMessage { margin:0; padding:12px 14px; border:1px solid #344252; border-radius:11px; background:#12161d; color:#b9c3ce; font-size:11px; line-height:1.5; }
 .alert { border-color:rgba(255,150,135,.35); background:rgba(255,120,100,.08); color:#ffc4bb; }
 .noticeLinks { display:flex; flex-wrap:wrap; gap:8px 18px; margin-top:8px; }
-.noticeLinks a { min-height:44px; display:inline-flex; align-items:center; color:#b9ddf4; }
+.noticeLinks a { min-height:44px; display:inline-flex; align-items:center; color:#ccff66; }
 .step { min-width:0; display:grid; gap:14px; padding:18px; border:1px solid #28313c; border-radius:14px; background:#10141a; }
 .stepHeading { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; }
-.pending,.verified,.met { color:#b9ddf4; font-size:10px; font-weight:500; letter-spacing:.08em; text-transform:uppercase; }
+.pending,.verified,.met { color:#ccff66; font-size:10px; font-weight:500; letter-spacing:.08em; text-transform:uppercase; }
 .met,.verified { color:#aee7d1; }
 .progress { position:relative; min-height:36px; overflow:hidden; border-radius:10px; background:#202833; }
 .progress>span { position:absolute; inset:0 auto 0 0; height:100%; background:rgba(145,199,232,.22); transition:width 220ms ease; }
@@ -46,7 +46,7 @@
 .keystoreBox small,.restoreBox small { color:#aab4c0; font-size:12px; line-height:1.5; }
 .restoreBox input[type=file] { max-width:100%; padding:9px; font-size:13px; }
 .restoreBox input[type=file]::file-selector-button { min-height:28px; margin-right:8px; border:0; border-radius:6px; padding:4px 8px; background:#28313c; color:#e1ecf5; }
-.controls input:focus-visible,.restoreBox input:focus-visible,.keystoreBox input:focus-visible,.keystoreBox select:focus-visible { outline:2px solid #b9ddf4; outline-offset:3px; }
+.controls input:focus-visible,.restoreBox input:focus-visible,.keystoreBox input:focus-visible,.keystoreBox select:focus-visible { outline:2px solid #ccff66; outline-offset:3px; }
 .fundingControls label { flex:1 1 220px; display:grid; gap:6px; color:#aab4c0; font-size:12px; }
 .fieldError { margin:0; color:#ffb8ac; font-size:11px; }
 .confirm { display:flex; align-items:flex-start; gap:9px; color:#aab4c0; font-size:11px; line-height:1.5; }

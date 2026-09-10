@@ -1,17 +1,17 @@
 .panel { width:min(1180px,calc(100% - 48px)); margin:28px auto; padding:clamp(24px,4vw,36px); border:1px solid #28313c; border-radius:18px; background:linear-gradient(145deg,#12161d,#0e1117); box-shadow:0 24px 70px rgba(0,0,0,.2); color:#f4f7fa; font-size:14px; line-height:1.65; }
-.panel::before { content:"Pro workspace"; display:block; margin-bottom:14px; color:#b9ddf4; font-size:11px; font-weight:500; letter-spacing:.14em; text-transform:uppercase; }
+.panel::before { content:"Pro workspace"; display:block; margin-bottom:14px; color:#ccff66; font-size:11px; font-weight:500; letter-spacing:.14em; text-transform:uppercase; }
 .panel h2 { margin:0; font-size:clamp(28px,3vw,40px); font-weight:500; letter-spacing:-.04em; }
 .panel p { margin:8px 0; }
-.label { color:#b9ddf4; font-size:12px; font-weight:500; letter-spacing:.12em; text-transform:uppercase; }
+.label { color:#ccff66; font-size:12px; font-weight:500; letter-spacing:.12em; text-transform:uppercase; }
 .note { max-width:850px; color:#aab4c0; }
-.active,.panel a { color:#b9ddf4; }
+.active,.panel a { color:#ccff66; }
 .controls { display:flex; align-items:end; flex-wrap:wrap; gap:12px; margin:22px 0; padding-top:20px; border-top:1px solid #28313c; }
 .controls label { display:flex; flex-direction:column; gap:7px; color:#c5ced7; font-size:13px; }
 .controls input { min-width:220px; min-height:48px; padding:0 14px; border:1px solid #344252; border-radius:12px; background:#090c11; color:#f4f7fa; font:inherit; }
-.controls button { min-height:48px; padding:0 18px; border:1px solid #b9ddf4; border-radius:12px; background:#b9ddf4; color:#071018; cursor:pointer; font:inherit; font-weight:500; transition:background 180ms ease,border-color 180ms ease; }
+.controls button { min-height:48px; padding:0 18px; border:1px solid #ccff66; border-radius:12px; background:#ccff66; color:#071018; cursor:pointer; font:inherit; font-weight:500; transition:background 180ms ease,border-color 180ms ease; }
 .controls button:hover:not(:disabled) { border-color:#dceefa; background:#dceefa; }
 .controls button:disabled { opacity:.5; cursor:not-allowed; }
-.controls input:focus-visible,.controls button:focus-visible,.panel a:focus-visible { outline:2px solid #b9ddf4; outline-offset:3px; }
+.controls input:focus-visible,.controls button:focus-visible,.panel a:focus-visible { outline:2px solid #ccff66; outline-offset:3px; }
 .holder { margin-top:22px; padding-top:18px; border-top:1px solid #28313c; }
 .holder h3 { margin:0; font-size:20px; font-weight:500; }
 .holder code { overflow-wrap:anywhere; font-size:12px; }
