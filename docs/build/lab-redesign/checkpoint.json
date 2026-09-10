@@ -1,6 +1,6 @@
 {
   "base": "b2e2ba722ccacff48987e6aa401bc035d5377f12",
-  "status": "implementing",
+  "status": "integrated; verification and independent review pending",
   "visualDirection": "science laboratory, chrome/glass specimen, graphite/chartreuse",
   "owners": [
     "lab_design",
@@ -10,6 +10,19 @@
   "deployTarget": "labs.hoodrich.rip / tx-build hoodlabs",
   "liveEnabled": false,
   "scope": "visual redesign, planning-only token tools, custom launch pair selection and protected implementation",
-  "baselineTests": "running",
-  "usage": "unknown"
+  "baselineTests": "PASS 214/214 at b2e2ba7",
+  "usage": "unknown",
+  "features": [
+    "Science laboratory interface and animated generated specimen",
+    "Free approved custom quote asset launches, zero initial developer buy",
+    "Free FDV/allocation/fee planning",
+    "Pro vesting/comparison/exports",
+    "Four structured guides with expandable detail"
+  ],
+  "constraints": [
+    "Protected preview only",
+    "No live financial enablement",
+    "No general ERC20 node trading",
+    "No runtime image-generation API added"
+  ]
 }

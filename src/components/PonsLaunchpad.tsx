@@ -24,6 +24,7 @@ import NodeTrading from "./NodeTrading";
 import TokenLinks from "./TokenLinks";
 import LabHero from "./LabHero";
 import PairSelector from "./PairSelector";
+import TokenLab from "./TokenLab";
 import styles from "./PonsLaunchpad.module.css";
 
 const PONS_CHAIN_ID = 4663;
@@ -572,7 +573,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
         <a href={`https://www.ponsfamily.com/launchpad/${receipt.tokenAddress}`} target="_blank" rel="noopener noreferrer">Open this token on PONS →</a>
       </section>}
       {proEnabled && launchEnabled && <NodeTrading session={nodeSession} launchedTokenAddress={receipt?.pairToken ? "" : receipt?.tokenAddress || ""} />}
-      <div id="token-lab" className={styles.integrationSlot} data-integration="token-lab" aria-hidden="true" />
+      <div id="token-lab" className={styles.integrationSlot}><TokenLab proEnabled={proEnabled} /></div>
       {proPanel}
 
       {prepared && submitState === "review" && <div className={styles.modalBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) invalidateReview(); }}>
