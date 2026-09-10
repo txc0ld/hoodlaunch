@@ -1,4 +1,4 @@
-import { ReactNode, ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ReactNode, ChangeEvent, DragEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { constants, utils } from "ethers";
 import {
   getLaunchOperation,
@@ -17,7 +17,7 @@ import {
 } from "../lib/pons";
 import type { LaunchOperation } from "../lib/pons";
 import type { LaunchDraft, LaunchReceipt, PreparedLaunch, ProtocolState, WalletState, PairAsset } from "../lib/pons-types";
-import type { NodeSession } from "../lib/node-vault";
+import { forgetNodeSession, type NodeSession } from "../lib/node-vault";
 import NodeManager from "./NodeManager";
 import NodeTrading from "./NodeTrading";
 import TokenLinks from "./TokenLinks";
@@ -113,8 +113,42 @@ function normalizeSocialUrl(value: string, host?: string) {
   return `https://${host && !withoutScheme.includes(".") ? `${host}/${withoutScheme}` : withoutScheme}`;
 }
 
-export interface PonsLaunchpadProps { generationEnabled?: boolean; sessionIdentity?: string | null; proEnabled?: boolean; proPanel?: ReactNode; launchEnabled?: boolean; }
-export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled=false, generationEnabled=false, sessionIdentity=null}: PonsLaunchpadProps) {
+// This boundary is keyed by every account/capability input below. Keeping the
+// session here prevents even the first render of a new owner from seeing it.
+function WalletWorkspace({ sessionIdentity, proEnabled, generationEnabled, nodeTradingEnabled, launchEnabled, launchedTokenAddress, children }: {
+  sessionIdentity: string | null; proEnabled: boolean; generationEnabled: boolean;
+  nodeTradingEnabled: boolean; launchEnabled: boolean; launchedTokenAddress: string; children: ReactNode;
+}) {
+  const [nodeSession, setNodeSession] = useState<NodeSession | null>(null);
+  const owner = useRef<{ active: boolean; session: NodeSession | null }>({ active: true, session: null });
+  useLayoutEffect(() => {
+    owner.current.active = true;
+    return () => {
+      // Invalidate the signing capability during commit, before passive child
+      // cleanup or an outstanding asynchronous trade can resume.
+      owner.current.active = false;
+      if (owner.current.session) forgetNodeSession(owner.current.session);
+      owner.current.session = null;
+    };
+  }, []);
+  const acceptSession = useCallback((session: NodeSession | null) => {
+    if (!owner.current.active) return;
+    owner.current.session = session;
+    setNodeSession(session);
+  }, []);
+  const canTrade = generationEnabled && nodeTradingEnabled && Boolean(sessionIdentity) && proEnabled;
+  return <>
+    <section id="wallet-workspace" className={styles.integrationSlot} aria-label="Wallet generator" tabIndex={-1}>
+      <div className={styles.workspaceIntro}><p className={styles.eyebrow}>WALLET WORKSPACE</p><h2>Wallet generator</h2><p>Create wallets, verify an encrypted backup, and restore access when you return. Free accounts can create one wallet every 24 hours; Pro supports up to 50 per attempt.</p></div>
+      {!generationEnabled ? <p className={styles.pendingNotice} role="status">Wallet creation and recovery are currently unavailable.</p> : !sessionIdentity ? <p className={styles.pendingNotice}><a href="#pro-account">Sign in to create or restore wallets.</a></p> : <NodeManager sessionIdentity={sessionIdentity} proEnabled={proEnabled} financeEnabled={proEnabled && launchEnabled} onSessionChange={acceptSession} />}
+    </section>
+    {children}
+    {canTrade ? <NodeTrading session={nodeSession} launchedTokenAddress={launchedTokenAddress} /> : <section id="node-trading" className={styles.pendingNotice} tabIndex={-1} aria-labelledby="trading-unavailable-title"><h2 id="trading-unavailable-title">Multi-wallet buying & selling</h2><span>Trade existing native ETH-paired PONS tokens using your verified wallets. Trading availability is separate from launching a new token.</span>{!generationEnabled || !nodeTradingEnabled ? <p role="status">Multi-wallet trading is currently unavailable.</p> : !sessionIdentity ? <a href="#pro-account">Sign in with Pro access to use multi-wallet trading.</a> : <p>Multi-wallet trading requires Pro. <a href="#pro-account">Check your account access.</a></p>}</section>}
+  </>;
+}
+
+export interface PonsLaunchpadProps { nodeTradingEnabled?: boolean; generationEnabled?: boolean; sessionIdentity?: string | null; proEnabled?: boolean; proPanel?: ReactNode; launchEnabled?: boolean; }
+export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled=false, generationEnabled=false, nodeTradingEnabled=false, sessionIdentity=null}: PonsLaunchpadProps) {
   const [protocol, setProtocol] = useState<ProtocolState | null>(null);
   const [protocolError, setProtocolError] = useState("");
   const [protocolLoading, setProtocolLoading] = useState(true);
@@ -143,7 +177,6 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
   const [txHash, setTxHash] = useState("");
   const [receipt, setReceipt] = useState<LaunchReceipt | null>(null);
   const [storedOperation, setStoredOperation] = useState<LaunchOperation | null>(null);
-  const [nodeSession, setNodeSession] = useState<NodeSession | null>(null);
   const uploadSequence = useRef(0);
   const uploadController = useRef<AbortController | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
@@ -486,7 +519,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
       <a className={styles.skipLink} href="#launch">Skip to launch workspace</a>
       <nav className={styles.nav} aria-label="Primary navigation">
         <a className={styles.brand} href="https://labs.hoodrich.rip" target="_blank" rel="noreferrer" aria-label="Open HOODLABS website"><span className={styles.brandMark}>H</span><span aria-hidden="true">𝖍𝖔𝖔𝖉𝖑𝖆𝖇𝖘<small>BY HOODRICH</small></span></a>
-        <div className={styles.navLinks}><a href="#launch"><span>01</span>Launch</a><a href="#pons-plan"><span>02</span>Plan</a><a href="#pair-research"><span>03</span>Choose pair</a></div>
+        <div className={styles.navLinks}><a href="#wallet-workspace">Wallets</a><a href="#node-trading">Buy & sell</a><a href="#launch">Launch</a><a href="#pons-plan">Plan</a><a href="#pro-account">Account</a></div>
         <div className={styles.walletControls}>
         {wallet ? (
           <button className={styles.walletButton} type="button" onClick={wrongChain ? handleSwitch : undefined} disabled={walletBusy}>
@@ -499,8 +532,8 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
 
       <LabHero />
       <nav className={styles.utilityNav} aria-label="HOODLABS resources"><span>GET READY</span><a href="/guide" target="_blank" rel="noopener noreferrer">How it works</a><a href="/pro" target="_blank" rel="noopener noreferrer">Free vs Pro</a><a href="/exchanges" target="_blank" rel="noopener noreferrer">Fund wallets</a><a href="/security" target="_blank" rel="noopener noreferrer">Stay safe</a></nav>
-      {!launchEnabled && <p className={styles.pendingNotice} role="status">Launch preview — live launching is not enabled yet.</p>}
-      {generationEnabled && (sessionIdentity ? <NodeManager key={`${sessionIdentity}:${proEnabled}`} sessionIdentity={sessionIdentity} proEnabled={proEnabled} financeEnabled={proEnabled && launchEnabled} onSessionChange={setNodeSession} /> : <p>Free accounts can create one wallet every 24 hours. <a href="#pro-account">Sign in to use wallet creation and recovery.</a></p>)}
+      {!launchEnabled && <p className={styles.pendingNotice} role="status">Token launch preview — live launching is not enabled yet. Wallet creation and trading have separate availability below.</p>}
+      <WalletWorkspace key={JSON.stringify([sessionIdentity, proEnabled, generationEnabled, nodeTradingEnabled, launchEnabled])} sessionIdentity={sessionIdentity} proEnabled={proEnabled} generationEnabled={generationEnabled} nodeTradingEnabled={nodeTradingEnabled} launchEnabled={launchEnabled} launchedTokenAddress={receipt?.pairToken ? "" : receipt?.tokenAddress || ""}>
 
       <section id="launch" className={styles.shell} aria-labelledby="launch-title">
         <div className={styles.formPane}>
@@ -614,7 +647,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
         <strong>Your custom pair is ready on PONS.</strong><span>Quote asset: {receipt.pairToken}. Generated-node trading here supports native ETH pairs. Use PONS for this token’s buys and sells; keep Robinhood ETH for gas.</span>
         <a href={`https://www.ponsfamily.com/launchpad/${receipt.tokenAddress}`} target="_blank" rel="noopener noreferrer">Open this token on PONS →</a>
       </section>}
-      {proEnabled && launchEnabled && <NodeTrading session={nodeSession} launchedTokenAddress={receipt?.pairToken ? "" : receipt?.tokenAddress || ""} />}
+      </WalletWorkspace>
       {proPanel}
       <div id="token-lab" className={styles.integrationSlot}><TokenLab proEnabled={proEnabled} /></div>
 

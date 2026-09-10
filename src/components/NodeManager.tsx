@@ -426,7 +426,7 @@ export default function NodeManager({ onSessionChange, sessionIdentity, proEnabl
         </div>
 
         <div className={`${styles.step} ${!verified ? styles.locked : ""}`} aria-disabled={!verified}>
-          <div className={styles.stepHeading}><span>2</span><div><h2>{financeEnabled ? "Fund and monitor wallets" : "Wallet addresses & recovery"}</h2><p>{financeEnabled ? "Send ETH using your wallet or exchange, then bridge to Robinhood Chain." : "Keep your encrypted backup offline. Funding and trading tools require Pro and live-tool availability."}</p></div></div>
+          <div className={styles.stepHeading}><span>2</span><div><h2>{financeEnabled ? "Fund and monitor wallets" : "Wallet addresses & recovery"}</h2><p>{financeEnabled ? "Send ETH using your wallet or exchange, then bridge to Robinhood Chain." : "Keep your encrypted backup offline. Funding and bridge tools are currently unavailable; multi-wallet trading has a separate section below."}</p></div></div>
           {!verified ? <p className={styles.lockMessage}>Verify the encrypted backup in step 1 to reveal funding destinations.</p> : session && <>
             {session.addresses.map((address,index)=><div key={`${session.id}-${index}`}><strong>Node {index+1}</strong><code className={styles.fullAddress}>{address}</code>{financeEnabled && <NodeBridge session={session} nodeIndex={index} />}</div>)}
             {!financeEnabled && <><button className={styles.secondaryButton} onClick={copyAddresses} type="button">Copy addresses</button>{copyStatus && <p role="status">{copyStatus}</p>}</>}
