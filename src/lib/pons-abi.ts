@@ -1,6 +1,8 @@
 // Source: https://docs.ponsfamily.com/v2 (launching, contracts, events).
 export const TOKEN_PARAMS = '(string name,string symbol,string logo,string description,(string twitter,string telegram,string discord,string website,string farcaster) socials,address creatorFeeRecipient,uint16 creatorTaxBps,bool buybackEnabled,bytes32 expectedEconomics,bytes32 salt)';
 export const FACTORY_ABI = [
+  'function approvedPairTokens(address pairToken) view returns (bool)',
+  'function pairTokenEconomics(address pairToken) view returns (uint256 phantomQuote,uint256 graduationThreshold,uint8 decimals)',
   'function launchConfigCount() view returns (uint256)',
   'function getLaunchConfig(uint256 id) view returns ((uint256 supply,uint256 curveFeeBps,uint256 phantomQuote,uint256 graduationThreshold,uint24 poolFee,int24 tickSpacing,bool enabled))',
   'function launchFee() view returns (uint256)',

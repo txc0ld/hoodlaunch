@@ -9,12 +9,13 @@ const { utils, BigNumber: BN, constants } = ethers;
 const ACCOUNT = '0x1111111111111111111111111111111111111111';
 const OTHER = '0x2222222222222222222222222222222222222222';
 const TOKEN = '0x3333333333333333333333333333333333333333';
+const PAIR = '0x5555555555555555555555555555555555555555';
 const CURVE = '0x4444444444444444444444444444444444444444';
 const HASH = '0x' + 'ab'.repeat(32);
 const PIN = '0x' + '12'.repeat(32);
 function harness(lockState = { held: false }, browserTransform = false, memory = new Map()) {
   const storage = {getItem:k=>memory.get(k)||null,setItem:(k,v)=>{if(state.storageFail)throw Error('storage');memory.set(k,v);},removeItem:k=>memory.delete(k)};
-  const state = { chainId: 4663, account: ACCOUNT, eligible: true, enabled: true, fee: BN.from('500000000000000'), cap: 1000, pin: PIN, gas: BN.from(100000), gasPrice: BN.from(100), balance: utils.parseEther('1000'), quote: BN.from('900719925474099312345'), sends: [], calls: [], walletCalls: [], now: 1000 };
+  const state = { approved: true, pairDecimals: 6, tokenDecimals: 6, pairSymbol: 'USDC', phantom: BN.from(1680000), threshold: BN.from(4200000), pairCode: '0x6000', chainId: 4663, account: ACCOUNT, eligible: true, enabled: true, fee: BN.from('500000000000000'), cap: 1000, pin: PIN, gas: BN.from(100000), gasPrice: BN.from(100), balance: utils.parseEther('1000'), quote: BN.from('900719925474099312345'), sends: [], calls: [], walletCalls: [], now: 1000 };
   const locks = { request: async (name, options, callback) => {
     assert.match(name,/^hoodrich:launch:v1:4663:0x[0-9a-f]{40}$/); assert.equal(options.mode, 'exclusive'); assert.equal(options.ifAvailable, true);
     if (lockState.held) return callback(null);
@@ -42,6 +43,7 @@ function harness(lockState = { held: false }, browserTransform = false, memory =
   const abis = load('pons-abi');
   const factory = new utils.Interface(abis.FACTORY_ABI);
   const router = new utils.Interface(abis.ROUTER_ABI);
+  const pairAbi = new utils.Interface(['function decimals() view returns (uint8)', 'function symbol() view returns (string)']);
   let core;
   function eventLog(overrides = {}) {
     const values = [TOKEN, CURVE, ACCOUNT, constants.AddressZero, 0, utils.parseEther('4.2')];
@@ -52,7 +54,7 @@ function harness(lockState = { held: false }, browserTransform = false, memory =
   class MockProvider {
     async send(method) { assert.equal(method, 'eth_chainId'); return utils.hexValue(state.chainId); }
     removeAllListeners() { state.listenersRemoved = true; }
-    async getCode(address) { return state.code === undefined ? (address.toLowerCase()===core.PONS_FACTORY.toLowerCase()?require('./fixtures/pons-trade-runtime.json').contracts[address.toLowerCase()]:require('./fixtures/pons-launch-router-runtime.json').runtimeBytecode) : state.code; }
+    async getCode(address) { if(address === PAIR)return state.pairCode; return state.code === undefined ? (address.toLowerCase()===core.PONS_FACTORY.toLowerCase()?require('./fixtures/pons-trade-runtime.json').contracts[address.toLowerCase()]:require('./fixtures/pons-launch-router-runtime.json').runtimeBytecode) : state.code; }
     async getTransactionCount(){return state.nonce||0;}
     async getBlockNumber(){return state.head||101;}
     async getBlock(){return {hash:state.blockHash||'0x'+'ef'.repeat(32)};}
@@ -60,13 +62,18 @@ function harness(lockState = { held: false }, browserTransform = false, memory =
     async getBalance() { return state.balance; }
     async getGasPrice() { return state.gasPrice; }
     async estimateGas(tx) { state.estimated = tx; return state.gas; }
-    async call(tx) {
+    async call(tx, blockTag) {
+      if(blockTag!==undefined)state.historicalReads=(state.historicalReads||0)+1;
       state.calls.push(tx);
-      const abi = tx.to.toLowerCase() === core.PONS_ROUTER.toLowerCase() ? router : factory;
+      const abi = tx.to === PAIR ? pairAbi : tx.to.toLowerCase() === core.PONS_ROUTER.toLowerCase() ? router : factory;
       const decoded = abi.parseTransaction(tx);
       if (state.onCall) await state.onCall(decoded);
       let result;
       switch (decoded.name) {
+        case 'approvedPairTokens': result = [state.approved]; break;
+        case 'pairTokenEconomics': result = [state.phantom, state.threshold, state.pairDecimals]; break;
+        case 'decimals': result = [state.tokenDecimals]; break;
+        case 'symbol': if(state.metadataError)throw Error('Metadata unavailable'); if(state.rawSymbol)return state.rawSymbol; result = [state.pairSymbol]; break;
         case 'launchConfigCount': result = [1]; break;
         case 'getLaunchConfig': result = [[utils.parseEther('1000000000'), 100, utils.parseEther('1.68'), utils.parseEther('4.2'), 0, 60, state.enabled]]; break;
         case 'launchFee': result = [state.fee]; break;
@@ -338,3 +345,64 @@ test('free image URI validator accepts IPFS and HTTPS but rejects executable/pri
 test('terminal-looking storage never substitutes for a fresh canonical recovery result',async()=>{const h=await interrupted();const key=h.core.launchOperationKey(ACCOUNT);const record=JSON.parse(h.memory.get(key));record.status='reverted';h.memory.set(key,JSON.stringify(record));h.state.receipt={confirmations:0};const checked=await h.core.recoverLaunch(ACCOUNT);assert.equal(checked.operation.status,'unknown');assert.equal(checked.receipt,undefined);await assert.rejects(h.core.prepareLaunch(h.draft,h.wallet));assert.equal(h.state.sends.length,1);});
 
 test('launch developer buy enforces the same maximum 2% slippage boundary',async()=>{const h=harness();h.draft.developerBuyEth='0.01';h.draft.slippageBps=200;const p=await h.core.prepareLaunch(h.draft,h.wallet);assert.equal(p.minTokensOut,h.state.quote.mul(9800).div(10000).toString());h.draft.slippageBps=201;await assert.rejects(h.core.prepareLaunch(h.draft,h.wallet),/2%/);assert.equal(h.state.sends.length,0);});
+
+function customHarness(...args) {
+  const h=harness(...args); h.draft.pairToken=PAIR;
+  h.state.receipt={logs:[h.eventLog({3:PAIR,5:h.state.threshold})]}; return h;
+}
+test('custom pair inspection reads approved deployed asset and decimal economics without wallet access',async()=>{
+ const h=customHarness();const pair=await h.core.inspectPairToken(PAIR);
+ assert.equal(pair.address,PAIR);assert.equal(pair.symbol,'USDC');assert.equal(pair.decimals,6);assert.equal(pair.phantomQuoteWei,'1680000');assert.equal(pair.graduationThresholdWei,'4200000');assert(Object.isFrozen(pair));assert.equal(h.state.walletCalls.length,0);assert.equal(h.state.sends.length,0);
+});
+test('custom direct launch binds pair address and economics, pays only ETH fee, and persists v2',async()=>{
+ const h=customHarness();const p=await h.core.prepareLaunch(h.draft,h.wallet);const tx=h.factory.parseTransaction(p.transaction);
+ assert(Object.isFrozen(p.pair));assert.equal(tx.args.pairToken,PAIR);assert.equal(tx.args.params.expectedEconomics,p.expectedEconomics);assert.equal(p.totalValueWei,h.state.fee.toString());assert.equal(p.developerBuyWei,'0');assert.equal(p.transaction.to,h.core.PONS_FACTORY);
+ for(const call of h.state.calls){const abi=call.to===PAIR?null:call.to===h.core.PONS_ROUTER?h.router:h.factory;if(abi){const parsed=abi.parseTransaction(call);if(parsed.name==='previewLaunchEconomics')assert.equal(parsed.args.pairToken,PAIR);}}
+ const result=await h.core.executePreparedLaunch(p,h.wallet);assert.equal(result.pairToken,PAIR);const op=h.core.getLaunchOperation(ACCOUNT);assert.equal(op.version,2);assert.equal(op.pair.address,PAIR);assert.equal(op.threshold,'4200000');assert.equal(op.expectedEconomics,PIN);assert.equal(h.state.sends.length,1);assert(h.state.historicalReads>=5);
+});
+test('custom pair and metadata failures prevent preparation and never send',async()=>{
+ for(const patch of [{approved:false},{pairCode:'0x'},{pairDecimals:18},{tokenDecimals:37,pairDecimals:37},{phantom:BN.from(0)},{threshold:BN.from(0)},{metadataError:true},{pairSymbol:'x'.repeat(33)},{pairSymbol:'bad\x01symbol'},{rawSymbol:'0x'+'00'.repeat(300)}]){
+  const h=customHarness();Object.assign(h.state,patch);await assert.rejects(h.core.prepareLaunch(h.draft,h.wallet));assert.equal(h.state.sends.length,0);
+ }
+ for(const pairToken of ['', 'no-address', '0x55555555555555555555555555555555555555555']){const h=customHarness();h.draft.pairToken=pairToken;await assert.rejects(h.core.prepareLaunch(h.draft,h.wallet));assert.equal(h.state.sends.length,0);}
+});
+test('custom pairs reject any nonzero developer buy before contract simulation',async()=>{
+ for(const buy of ['1','0.000000000000000001']){const h=customHarness();h.draft.developerBuyEth=buy;await assert.rejects(h.core.prepareLaunch(h.draft,h.wallet),/zero developer buy/);assert.equal(h.state.calls.length,0);assert.equal(h.state.sends.length,0);}
+});
+test('custom pair decimals support 0 and 36 without ETH scaling assumptions',async()=>{
+ for(const decimals of [0,36]){const h=customHarness();h.state.tokenDecimals=decimals;h.state.pairDecimals=decimals;const p=await h.core.prepareLaunch(h.draft,h.wallet);assert.equal(p.pair.decimals,decimals);assert.equal(p.pair.graduationThresholdWei,'4200000');}
+});
+test('custom revalidation rejects changed approval, reserves, threshold, symbol and matching changed decimals',async()=>{
+ for(const patch of [{approved:false},{phantom:BN.from(1)},{threshold:BN.from(1)},{pairSymbol:'DIFFERENT'},{pairDecimals:18,tokenDecimals:18},{pairCode:'0x'},{pin:'0x'+'34'.repeat(32)}]){
+  const h=customHarness();const p=await h.core.prepareLaunch(h.draft,h.wallet);Object.assign(h.state,patch);await assert.rejects(h.core.executePreparedLaunch(p,h.wallet),e=>e.submissionState==='not-submitted');assert.equal(h.state.sends.length,0);
+ }
+});
+test('custom approval revoked during final simulation is checked again before wallet send',async()=>{
+ const h=customHarness();const p=await h.core.prepareLaunch(h.draft,h.wallet);h.state.onCall=d=>{if(d.name==='launchToken')h.state.approved=false;};await assert.rejects(h.core.executePreparedLaunch(p,h.wallet),/not approved/);assert.equal(h.state.sends.length,0);
+});
+test('custom receipt mismatched pair or threshold retains uncertain operation',async()=>{
+ for(const values of [{3:constants.AddressZero},{3:OTHER},{5:utils.parseEther('4.2')}]){const h=customHarness();const p=await h.core.prepareLaunch(h.draft,h.wallet);h.state.receipt={logs:[h.eventLog({3:PAIR,5:h.state.threshold,...values})]};await assert.rejects(h.core.executePreparedLaunch(p,h.wallet),e=>e.submissionState==='unknown');assert.equal(h.core.getLaunchOperation(ACCOUNT).status,'pending');assert.equal(h.state.sends.length,1);}
+});
+async function interruptedCustom(){const h=customHarness();const p=await h.core.prepareLaunch(h.draft,h.wallet);h.state.wait=async()=>{throw Error('interrupted');};await assert.rejects(h.core.executePreparedLaunch(p,h.wallet));h.state.wait=undefined;return h;}
+test('custom v2 reload recovery checks canonical pair economics and exact transaction',async()=>{
+ const old=await interruptedCustom();const h=customHarness({held:false},false,old.memory);h.state.sends=old.state.sends;const result=await h.core.recoverLaunch(ACCOUNT);assert.equal(result.operation.status,'confirmed');assert.equal(result.receipt.pairToken,PAIR);assert.equal(h.state.sends.length,1);
+});
+test('custom recovery rejects version confusion, altered pair/calldata fingerprint and metadata',async()=>{
+ const original=await interruptedCustom();const key=original.core.launchOperationKey(ACCOUNT);const raw=original.memory.get(key);
+ for(const edit of [r=>r.version=1,r=>r.version=3,r=>delete r.pair,r=>r.pair.address=OTHER,r=>r.pair.decimals=37,r=>r.expectedEconomics='0x'+'cd'.repeat(32),r=>r.pair.graduationThresholdWei='1',r=>r.pair.extra='untrusted',r=>{r.version=1;delete r.pair;delete r.expectedEconomics;}]){
+  const h=customHarness();const record=JSON.parse(raw);edit(record);h.memory.set(key,JSON.stringify(record));assert.throws(()=>h.core.getLaunchOperation(ACCOUNT),/storage/);assert.equal(h.state.sends.length,0);
+ }
+ for(const edit of [r=>r.pair.decimals=7,r=>r.pair.phantomQuoteWei='1',r=>r.pair.symbol='FAKE']){
+  const h=customHarness();h.state.sends=original.state.sends;const record=JSON.parse(raw);edit(record);h.memory.set(key,JSON.stringify(record));await assert.rejects(h.core.recoverLaunch(ACCOUNT),/economics/);assert.equal(h.core.getLaunchOperation(ACCOUNT).status,'unknown');assert.equal(h.state.sends.length,1);
+ }
+});
+test('native records cannot silently acquire custom pair metadata',async()=>{
+ const h=await interrupted();const key=h.core.launchOperationKey(ACCOUNT);const record=JSON.parse(h.memory.get(key));record.pair={address:PAIR};h.memory.set(key,JSON.stringify(record));assert.throws(()=>h.core.getLaunchOperation(ACCOUNT),/storage/);
+});
+test('custom inspection fails closed on timeout and wrong chain, without wallet access',async()=>{
+ const h=customHarness();h.state.forceTimeout=true;h.state.onCall=()=>new Promise(()=>{});await assert.rejects(h.core.inspectPairToken(PAIR),/timed out/);assert.equal(h.state.walletCalls.length,0);assert.equal(h.state.listenersRemoved,true);
+ const b=customHarness();b.state.chainId=1;await assert.rejects(b.core.inspectPairToken(PAIR),/4663/);assert.equal(b.state.calls.length,0);
+});
+test('Next production browser transform preserves custom quote metadata and factory payload',async()=>{
+ const h=customHarness({held:false},true);const p=await h.core.prepareLaunch(h.draft,h.wallet);assert.equal(p.pair.decimals,6);assert.equal(h.factory.parseTransaction(p.transaction).args.pairToken,PAIR);
+});

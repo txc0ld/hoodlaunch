@@ -1,7 +1,7 @@
 import { BigNumber, providers, utils, constants } from 'ethers';
 import { LAUNCH_FACTORY_HASH, LAUNCH_ROUTER_HASH, verifyRuntime } from './trusted-runtime';
 import { FACTORY_ABI, ROUTER_ABI } from './pons-abi';
-import type { LaunchConfig, ProtocolState, WalletState, LaunchDraft, PreparedLaunch, LaunchReceipt } from './pons-types';
+import type { LaunchConfig, ProtocolState, WalletState, LaunchDraft, PreparedLaunch, LaunchReceipt, PairAsset } from './pons-types';
 
 export const PONS_CHAIN_ID = 4663;
 export const PONS_EXPLORER = 'https://robinhoodchain.blockscout.com';
@@ -41,9 +41,49 @@ async function chain(provider: providers.JsonRpcProvider): Promise<number> {
   if (id !== PONS_CHAIN_ID) fail('Switch your wallet to Robinhood Chain (4663).');
   return id;
 }
-async function read(provider: providers.Provider, name: string, args: unknown[] = []) {
-  const result = await provider.call({ to: PONS_FACTORY, data: factory.encodeFunctionData(name, args) });
+async function read(provider: providers.Provider, name: string, args: unknown[] = [], blockTag?: number) {
+  const result = await provider.call({ to: PONS_FACTORY, data: factory.encodeFunctionData(name, args) }, blockTag);
   return factory.decodeFunctionResult(name, result)[0];
+}
+const pairAbi = new utils.Interface(['function decimals() view returns (uint8)', 'function symbol() view returns (string)']);
+function pairAddress(value?: string): string {
+  if (value === undefined || value === ZERO) return ZERO;
+  return address(value.trim(), 'Pair asset');
+}
+function samePair(a: PairAsset, b: PairAsset): boolean {
+  return a.address === b.address && a.symbol === b.symbol && a.decimals === b.decimals && a.phantomQuoteWei === b.phantomQuoteWei && a.graduationThresholdWei === b.graduationThresholdWei;
+}
+async function readPair(provider: providers.Provider, value: string, blockTag?: number): Promise<PairAsset> {
+  const pair = address(value, 'Pair asset');
+  const [approved, code, rawEconomics, rawDecimals, rawSymbol] = await Promise.all([
+    read(provider, 'approvedPairTokens', [pair], blockTag), provider.getCode(pair, blockTag),
+    provider.call({to:PONS_FACTORY,data:factory.encodeFunctionData('pairTokenEconomics',[pair])}, blockTag),
+    provider.call({to:pair,data:pairAbi.encodeFunctionData('decimals')}, blockTag),
+    provider.call({to:pair,data:pairAbi.encodeFunctionData('symbol')}, blockTag),
+  ]);
+  if (approved !== true) fail('The selected pairing asset is not approved by PONS.');
+  if (!/^0x[0-9a-fA-F]+$/.test(code) || code === '0x') fail('The pairing asset has no deployed contract.');
+  // Bound return data before dynamic ABI decoding; do not interpret symbols as URLs or HTML.
+  if (rawEconomics.length !== 194 || rawDecimals.length !== 66 || rawSymbol.length > 514) fail('The pairing asset metadata is invalid or too large.');
+  const economics = factory.decodeFunctionResult('pairTokenEconomics', rawEconomics);
+  const decimals = Number(pairAbi.decodeFunctionResult('decimals', rawDecimals)[0]);
+  const symbol = textValue(pairAbi.decodeFunctionResult('symbol', rawSymbol)[0], 'Pair asset symbol', 32, true);
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36 || decimals !== Number(economics.decimals)) fail('The pairing asset decimals do not match supported protocol metadata.');
+  if (economics.phantomQuote.lte(0) || economics.graduationThreshold.lte(0)) fail('The pairing asset economics are unavailable.');
+  return Object.freeze({address:pair,symbol,decimals,phantomQuoteWei:economics.phantomQuote.toString(),graduationThresholdWei:economics.graduationThreshold.toString()});
+}
+/** Public read-only inspection; never requests wallet access or enumerates assumed assets. */
+export async function inspectPairToken(value: string): Promise<PairAsset> {
+  const pair = address(value.trim(), 'Pair asset');
+  const provider = new providers.JsonRpcProvider({url:PONS_RPC,timeout:15000});
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([(async () => {
+      await chain(provider); await codeCheck(provider, false);
+      const asset = await readPair(provider, pair); await chain(provider); return asset;
+    })(), new Promise<never>((_,reject) => {timer=setTimeout(()=>reject(new Error('Pair asset lookup timed out. Try again.')),20000);})]);
+  } catch(error) {throw safeError(error);}
+  finally {if(timer!==undefined)clearTimeout(timer);provider.removeAllListeners();}
 }
 function configValue(id: string, c: utils.Result): LaunchConfig {
   return { id, supplyWei: c.supply.toString(), curveFeeBps: Number(c.curveFeeBps), phantomQuoteWei: c.phantomQuote.toString(), graduationThresholdWei: c.graduationThreshold.toString(), poolFee: Number(c.poolFee), tickSpacing: Number(c.tickSpacing), enabled: c.enabled };
@@ -141,21 +181,24 @@ function validate(draft: LaunchDraft, account: string) {
   if (!/^(0|[1-9]\d*)$/.test(draft.configId)) fail('Choose a valid launch configuration.');
   if (!/^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/.test(draft.developerBuyEth)) fail('Developer buy must be an ETH amount with at most 18 decimal places.');
   const buy = utils.parseEther(draft.developerBuyEth);
+  const pairToken = pairAddress(draft.pairToken);
+  if (pairToken !== ZERO && !buy.isZero()) fail('Custom pair launches require zero developer buy. Buy separately on PONS after launch.');
   if (!Number.isInteger(draft.creatorTaxBps) || draft.creatorTaxBps < 0 || draft.creatorTaxBps > 10000) fail('Creator tax must be a valid basis-point amount.');
   if (!Number.isInteger(draft.slippageBps) || draft.slippageBps < 0 || draft.slippageBps > 200) fail('Slippage must be between 0 and 200 basis points (2%).');
   if (typeof draft.buybackEnabled !== 'boolean') fail('Choose a valid buyback setting.');
   if (!Array.isArray(draft.exemptions) || draft.exemptions.length > 32) fail('At most 32 snipe-tax exemptions are allowed.');
   const exemptions = draft.exemptions.map(value => address(value.trim(), 'Exemption'));
   if (new Set(exemptions).size !== exemptions.length) fail('Remove duplicate exemption addresses.');
-  return { name, symbol, logo, description, socials: { twitter: url(draft.twitter, 'Twitter'), telegram: url(draft.telegram, 'Telegram'), discord: url(draft.discord, 'Discord'), website: url(draft.website, 'Website'), farcaster: url(draft.farcaster, 'Farcaster') }, creatorFeeRecipient: address(draft.creatorFeeRecipient.trim() || account, 'Creator fee recipient'), creatorTaxBps: draft.creatorTaxBps, buybackEnabled: draft.buybackEnabled, buy, exemptions };
+  return { name, symbol, logo, description, socials: { twitter: url(draft.twitter, 'Twitter'), telegram: url(draft.telegram, 'Telegram'), discord: url(draft.discord, 'Discord'), website: url(draft.website, 'Website'), farcaster: url(draft.farcaster, 'Farcaster') }, creatorFeeRecipient: address(draft.creatorFeeRecipient.trim() || account, 'Creator fee recipient'), creatorTaxBps: draft.creatorTaxBps, buybackEnabled: draft.buybackEnabled, buy, exemptions, pairToken };
 }
-async function terms(provider: providers.Web3Provider, account: string, configId: string, tax: number) {
+async function terms(provider: providers.Web3Provider, account: string, configId: string, tax: number, pairToken = ZERO) {
   await chain(provider);
-  const [eligible, config, cap, fee, economics] = await Promise.all([read(provider, 'canLaunch', [account]), read(provider, 'getLaunchConfig', [configId]), read(provider, 'maxCreatorTaxBps'), read(provider, 'launchFee'), read(provider, 'previewLaunchEconomics', [configId, ZERO])]);
+  const [eligible, config, cap, fee, economics] = await Promise.all([read(provider, 'canLaunch', [account]), read(provider, 'getLaunchConfig', [configId]), read(provider, 'maxCreatorTaxBps'), read(provider, 'launchFee'), read(provider, 'previewLaunchEconomics', [configId, pairToken])]);
   if (!eligible) fail('This wallet is not currently approved to launch on PONS V2.');
   if (!config.enabled) fail('This launch configuration is disabled. Choose another configuration.');
   if (tax > Number(cap)) fail('Creator tax exceeds the current protocol maximum.');
-  return { config: configValue(configId, config), fee: BigNumber.from(fee), economics: String(economics) };
+  const pair = pairToken === ZERO ? undefined : await readPair(provider, pairToken);
+  return { pair, config: configValue(configId, config), fee: BigNumber.from(fee), economics: String(economics) };
 }
 async function costs(provider: providers.Web3Provider, account: string, tx: providers.TransactionRequest) {
   await chain(provider);
@@ -175,14 +218,14 @@ export async function prepareLaunch(draft: LaunchDraft, wallet: WalletState): Pr
     if (activeAccounts.has(wallet.account.toLowerCase()) || unresolved(wallet.account)) fail('A launch transaction is pending or its outcome is unknown. Check the wallet and explorer before continuing.');
     const valid = validate(draft, wallet.account);
     await codeCheck(provider, !valid.buy.isZero());
-    const current = await terms(provider, wallet.account, draft.configId, valid.creatorTaxBps);
+    const current = await terms(provider, wallet.account, draft.configId, valid.creatorTaxBps, valid.pairToken);
     const salt = utils.hexlify(utils.randomBytes(32));
     const params = { ...valid, expectedEconomics: current.economics, salt };
     const value = current.fee.add(valid.buy);
     const buying = !valid.buy.isZero();
     const abi = buying ? router : factory;
     const fn = buying ? 'launchAndBuy' : 'launchToken';
-    const args = buying ? [params, draft.configId, ZERO, valid.buy, '0', wallet.account, valid.exemptions] : [params, draft.configId, ZERO, valid.exemptions];
+    const args = buying ? [params, draft.configId, valid.pairToken, valid.buy, '0', wallet.account, valid.exemptions] : [params, draft.configId, valid.pairToken, valid.exemptions];
     const tx = { to: buying ? PONS_ROUTER : PONS_FACTORY, data: abi.encodeFunctionData(fn, args), value: value.toHexString() };
     await assertWallet(ethereum, wallet);
     const simulation = await provider.call({ ...tx, from: wallet.account });
@@ -198,8 +241,8 @@ export async function prepareLaunch(draft: LaunchDraft, wallet: WalletState): Pr
     }
     const estimated = await costs(provider, wallet.account, tx);
     await assertWallet(ethereum, wallet);
-    const prepared: PreparedLaunch = Object.freeze({ account: wallet.account, chainId: PONS_CHAIN_ID, name: valid.name, symbol: valid.symbol, logo: valid.logo, creatorFeeRecipient: valid.creatorFeeRecipient, launchFeeWei: current.fee.toString(), developerBuyWei: valid.buy.toString(), totalValueWei: value.toString(), estimatedGasWei: estimated.gasWei.toString(), minTokensOut: minimum.toString(), expectedTokensOut: expected.toString(), expectedEconomics: current.economics, configId: draft.configId, salt, createdAt: Date.now(), transaction: Object.freeze({ ...tx, gasLimit: estimated.gasLimit.toString() }) });
-    preparations.set(prepared, { ethereum, threshold: current.config.graduationThresholdWei, token: quoted.token, curve: quoted.curve, tax: valid.creatorTaxBps, state: 'ready' });
+    const prepared: PreparedLaunch = Object.freeze({ ...(current.pair ? {pair:current.pair} : {}), account: wallet.account, chainId: PONS_CHAIN_ID, name: valid.name, symbol: valid.symbol, logo: valid.logo, creatorFeeRecipient: valid.creatorFeeRecipient, launchFeeWei: current.fee.toString(), developerBuyWei: valid.buy.toString(), totalValueWei: value.toString(), estimatedGasWei: estimated.gasWei.toString(), minTokensOut: minimum.toString(), expectedTokensOut: expected.toString(), expectedEconomics: current.economics, configId: draft.configId, salt, createdAt: Date.now(), transaction: Object.freeze({ ...tx, gasLimit: estimated.gasLimit.toString() }) });
+    preparations.set(prepared, { ethereum, threshold: current.pair?.graduationThresholdWei ?? current.config.graduationThresholdWei, token: quoted.token, curve: quoted.curve, tax: valid.creatorTaxBps, state: 'ready' });
     return prepared;
   } catch (e) { throw safeError(e); }
 }
@@ -215,7 +258,7 @@ export class PonsSubmissionError extends Error {
 }
 const OPERATION_PREFIX = 'hoodrich:launch:v1:4663:';
 export interface LaunchOperation {
-  version: 1; id: string; account: string; chainId: 4663; createdAt: number;
+  version: 1 | 2; pair?: PairAsset; expectedEconomics?: string; id: string; account: string; chainId: 4663; createdAt: number;
   status: 'pending' | 'unknown' | 'confirmed' | 'reverted'; hash?: string;
   token: string; curve: string; configId: string; threshold: string;
   transaction: { to: string; data: string; value: string; gasLimit: string; gasPrice: string; nonce: number };
@@ -225,8 +268,8 @@ function parseOperation(raw: string, account: string): LaunchOperation {
   try {
     if (raw.length > 50000) throw Error();
     const r = JSON.parse(raw) as LaunchOperation;
-    const keys = ['version','id','account','chainId','createdAt','status','token','curve','configId','threshold','transaction', ...(r.hash ? ['hash'] : [])];
-    if (Object.keys(r).length !== keys.length || !keys.every(k => Object.prototype.hasOwnProperty.call(r,k)) || r.version !== 1 || r.chainId !== 4663 ||
+    const keys = ['version','id','account','chainId','createdAt','status','token','curve','configId','threshold','transaction', ...(r.hash ? ['hash'] : []), ...(r.version === 2 ? ['pair','expectedEconomics'] : [])];
+    if (Object.keys(r).length !== keys.length || !keys.every(k => Object.prototype.hasOwnProperty.call(r,k)) || (r.version !== 1 && r.version !== 2) || r.chainId !== 4663 ||
       !/^0x[0-9a-f]{32}$/.test(r.id) || address(r.account,'Account') !== address(account,'Account') || !Number.isSafeInteger(r.createdAt) || r.createdAt <= 0 ||
       !['pending','unknown','confirmed','reverted'].includes(r.status) || (r.hash !== undefined && !/^0x[0-9a-fA-F]{64}$/.test(r.hash)) ||
       (!r.hash && ['confirmed','reverted'].includes(r.status))) throw Error();
@@ -237,11 +280,20 @@ function parseOperation(raw: string, account: string): LaunchOperation {
       !Number.isSafeInteger(tx.nonce) || tx.nonce < 0) throw Error();
     for (const n of [r.configId,r.threshold,tx.value,tx.gasLimit,tx.gasPrice]) if (typeof n !== 'string' || !/^(0|[1-9]\d{0,77})$/.test(n) || BigNumber.from(n).gt(constants.MaxUint256)) throw Error();
     if (BigNumber.from(tx.gasLimit).lte(0) || BigNumber.from(tx.gasPrice).lte(0)) throw Error();
+    if (r.version === 2) {
+      const p = r.pair;
+      if (!p || Object.keys(p).sort().join() !== 'address,decimals,graduationThresholdWei,phantomQuoteWei,symbol' ||
+        address(p.address,'Pair asset') !== p.address || !Number.isInteger(p.decimals) || p.decimals < 0 || p.decimals > 36 ||
+        textValue(p.symbol,'Pair asset symbol',32,true) !== p.symbol || p.graduationThresholdWei !== r.threshold ||
+        typeof p.phantomQuoteWei !== 'string' || !/^[1-9]\d{0,77}$/.test(p.phantomQuoteWei) || BigNumber.from(p.phantomQuoteWei).gt(constants.MaxUint256) || BigNumber.from(r.threshold).isZero() ||
+        typeof r.expectedEconomics !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(r.expectedEconomics)) throw Error();
+    }
     const routed = tx.to.toLowerCase() === PONS_ROUTER.toLowerCase();
     const decoded = (routed ? router : factory).parseTransaction({data:tx.data,value:tx.value});
-    if (decoded.name !== (routed ? 'launchAndBuy' : 'launchToken') || !decoded.args.launchConfigId.eq(r.configId) || decoded.args.pairToken !== ZERO ||
+    if (decoded.name !== (routed ? 'launchAndBuy' : 'launchToken') || !decoded.args.launchConfigId.eq(r.configId) || decoded.args.pairToken !== (r.pair?.address ?? ZERO) ||
+      (r.version === 2 && (routed || decoded.args.params.expectedEconomics !== r.expectedEconomics)) ||
       (routed && decoded.args.recipient.toLowerCase() !== r.account.toLowerCase())) throw Error();
-    return Object.freeze({...r, transaction:Object.freeze({...tx})});
+    return Object.freeze({...r, ...(r.pair ? {pair:Object.freeze({...r.pair})} : {}), transaction:Object.freeze({...tx})});
   } catch { return fail('Launch recovery data is invalid. Preserve it and reconcile the account before another launch.'); }
 }
 export function getLaunchOperation(account: string): LaunchOperation | null {
@@ -272,12 +324,16 @@ async function confirmedReceipt(provider: providers.JsonRpcProvider, operation: 
   validateReceipt(receipt,operation.hash,{account:operation.account,transaction:expected});
   await Promise.all([verifyRuntime(provider,PONS_FACTORY,LAUNCH_FACTORY_HASH,receipt.blockNumber),
     ...(expected.to.toLowerCase()===PONS_ROUTER.toLowerCase()?[verifyRuntime(provider,PONS_ROUTER,LAUNCH_ROUTER_HASH,receipt.blockNumber)]:[])]);
+  if (operation.pair && receipt.status === 1) {
+    const [pair, economics] = await Promise.all([readPair(provider,operation.pair.address,receipt.blockNumber),read(provider,'previewLaunchEconomics',[operation.configId,operation.pair.address],receipt.blockNumber)]);
+    if (!samePair(pair,operation.pair) || String(economics).toLowerCase() !== operation.expectedEconomics?.toLowerCase()) fail('The confirmed pairing asset economics do not match the persisted launch intent.');
+  }
   const canonical=await provider.getBlock(receipt.blockNumber); await chain(provider);
   if(!canonical || canonical.hash!==receipt.blockHash)return null;
   return receipt;
 }
 function recoveredResult(receipt: providers.TransactionReceipt, operation: LaunchOperation): LaunchReceipt {
-  return receiptResult(receipt,{account:operation.account,configId:operation.configId},
+  return receiptResult(receipt,{account:operation.account,configId:operation.configId,pair:operation.pair},
     {token:operation.token,curve:operation.curve,threshold:operation.threshold});
 }
 export async function recoverLaunch(account: string): Promise<{operation:LaunchOperation;receipt?:LaunchReceipt}> {
@@ -321,14 +377,14 @@ function validateReceipt(receipt: providers.TransactionReceipt, hash: string, pr
     fail('Receipt does not match the submitted launch. Check the explorer; do not resend.');
   }
 }
-function receiptResult(receipt: providers.TransactionReceipt, prepared: Pick<PreparedLaunch, 'account' | 'configId'>, record: Pick<Preparation, 'token' | 'curve' | 'threshold'>): LaunchReceipt {
+function receiptResult(receipt: providers.TransactionReceipt, prepared: Pick<PreparedLaunch, 'account' | 'configId' | 'pair'>, record: Pick<Preparation, 'token' | 'curve' | 'threshold'>): LaunchReceipt {
   if (!Array.isArray(receipt.logs)) fail('Launch receipt logs are unavailable. Check the explorer; do not resend.');
   for (const log of receipt.logs) {
     if (log.address.toLowerCase() !== PONS_FACTORY.toLowerCase()) continue;
     try {
       const parsed = factory.parseLog(log);
       const a = parsed.args;
-      if (parsed.name === 'TokenLaunched' && a.deployer.toLowerCase() === prepared.account.toLowerCase() && a.pairToken === ZERO && a.launchConfigId.eq(prepared.configId) && a.graduationThreshold.eq(record.threshold) && a.token.toLowerCase() === record.token.toLowerCase() && a.curve.toLowerCase() === record.curve.toLowerCase()) return { transactionHash: receipt.transactionHash, tokenAddress: a.token, curveAddress: a.curve, explorerUrl: `${PONS_EXPLORER}/tx/${receipt.transactionHash}` };
+      if (parsed.name === 'TokenLaunched' && a.deployer.toLowerCase() === prepared.account.toLowerCase() && a.pairToken === (prepared.pair?.address ?? ZERO) && a.launchConfigId.eq(prepared.configId) && a.graduationThreshold.eq(record.threshold) && a.token.toLowerCase() === record.token.toLowerCase() && a.curve.toLowerCase() === record.curve.toLowerCase()) return { ...(prepared.pair ? {pairToken:prepared.pair.address} : {}), transactionHash: receipt.transactionHash, tokenAddress: a.token, curveAddress: a.curve, explorerUrl: `${PONS_EXPLORER}/tx/${receipt.transactionHash}` };
     } catch { /* Other factory events are not launch confirmation. */ }
   }
   return fail('Transaction mined, but its expected launch event was not found. Check the explorer; do not resend.');
@@ -364,8 +420,8 @@ async function executeUnderLock(prepared: PreparedLaunch, wallet: WalletState, o
     if (Date.now() - prepared.createdAt > MAX_AGE || Date.now() < prepared.createdAt) fail('Launch review expired. Review fresh terms before confirming.');
     if (wallet.account.toLowerCase() !== key || wallet.chainId !== prepared.chainId) fail('Wallet changed. Review the launch again.');
     const provider = await assertWallet(record.ethereum, wallet);
-    const current = await terms(provider, prepared.account, prepared.configId, record.tax);
-    if (current.economics.toLowerCase() !== prepared.expectedEconomics.toLowerCase() || !current.fee.eq(prepared.launchFeeWei) || current.config.graduationThresholdWei !== record.threshold) fail('Launch terms changed. Review fresh terms before confirming.');
+    const current = await terms(provider, prepared.account, prepared.configId, record.tax, prepared.pair?.address);
+    if (current.economics.toLowerCase() !== prepared.expectedEconomics.toLowerCase() || !current.fee.eq(prepared.launchFeeWei) || (current.pair?.graduationThresholdWei ?? current.config.graduationThresholdWei) !== record.threshold || (prepared.pair && (!current.pair || !samePair(prepared.pair,current.pair)))) fail('Launch terms changed. Review fresh terms before confirming.');
     await codeCheck(provider, prepared.transaction.to === PONS_ROUTER);
     await assertWallet(record.ethereum, wallet);
     await provider.call({ ...prepared.transaction, from: prepared.account });
@@ -382,6 +438,13 @@ async function executeUnderLock(prepared: PreparedLaunch, wallet: WalletState, o
     if (nonce!==latestNonce) fail('This account has a pending transaction. Wait before launching.');
     await assertWallet(record.ethereum,wallet);
     if(Date.now()-prepared.createdAt>MAX_AGE)fail('Launch review expired before submission.');
+    // Refresh custom approval and metadata at the final send boundary as well as preflight.
+    if (prepared.pair) {
+      const finalTerms = await terms(provider,prepared.account,prepared.configId,record.tax,prepared.pair.address);
+      if (!finalTerms.pair || !samePair(finalTerms.pair,prepared.pair) || finalTerms.economics.toLowerCase() !== prepared.expectedEconomics.toLowerCase() || !finalTerms.fee.eq(prepared.launchFeeWei)) fail('Launch terms changed. Review fresh terms before confirming.');
+      await assertWallet(record.ethereum,wallet);
+      if (Date.now()-prepared.createdAt>MAX_AGE) fail('Launch review expired before submission.');
+    }
     const request = {
       from: prepared.account, to: prepared.transaction.to, data: prepared.transaction.data,
       value: utils.hexValue(BigNumber.from(prepared.totalValueWei)), gas: utils.hexValue(BigNumber.from(prepared.transaction.gasLimit)),
@@ -393,7 +456,7 @@ async function executeUnderLock(prepared: PreparedLaunch, wallet: WalletState, o
       if (error instanceof PonsSubmissionError && error.submissionState === 'unknown') outcome = 'unknown';
       throw error;
     }
-    let operation:LaunchOperation={version:1,id:utils.hexlify(utils.randomBytes(16)),account:prepared.account,chainId:4663,createdAt:Date.now(),status:'pending',token:record.token,curve:record.curve,configId:prepared.configId,threshold:record.threshold,transaction:{to:prepared.transaction.to,data:prepared.transaction.data,value:prepared.totalValueWei,gasLimit:prepared.transaction.gasLimit,gasPrice:estimate.maxGasPrice.toString(),nonce}};
+    let operation:LaunchOperation={version:prepared.pair?2:1,...(prepared.pair?{pair:prepared.pair,expectedEconomics:prepared.expectedEconomics}:{}),id:utils.hexlify(utils.randomBytes(16)),account:prepared.account,chainId:4663,createdAt:Date.now(),status:'pending',token:record.token,curve:record.curve,configId:prepared.configId,threshold:record.threshold,transaction:{to:prepared.transaction.to,data:prepared.transaction.data,value:prepared.totalValueWei,gasLimit:prepared.transaction.gasLimit,gasPrice:estimate.maxGasPrice.toString(),nonce}};
     saveOperation(operation);
     outcome = 'unknown';
     record.state = 'submitted';
