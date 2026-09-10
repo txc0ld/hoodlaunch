@@ -1,7 +1,12 @@
-import { ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ReactNode, ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { utils } from "ethers";
 import {
   connectWallet,
+  getLaunchOperation,
+  recoverLaunch,
+  exportLaunchRecovery,
+  launchOperationKey,
+  validateImageUri,
   executePreparedLaunch,
   getProtocolState,
   onWalletChange,
@@ -11,6 +16,7 @@ import {
   refreshWallet,
   switchToPons,
 } from "../lib/pons";
+import type { LaunchOperation } from "../lib/pons";
 import type { LaunchDraft, LaunchReceipt, PreparedLaunch, ProtocolState, WalletState } from "../lib/pons-types";
 import type { NodeSession } from "../lib/node-vault";
 import NodeManager from "./NodeManager";
@@ -18,9 +24,8 @@ import NodeTrading from "./NodeTrading";
 import styles from "./PonsLaunchpad.module.css";
 
 const PONS_CHAIN_ID = 4663;
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
-const OPERATION_KEY = "pons-v2:launch-operation";
 
 const EMPTY_DRAFT: LaunchDraft = {
   name: "",
@@ -43,7 +48,7 @@ const EMPTY_DRAFT: LaunchDraft = {
 
 type ImageState = "idle" | "uploading" | "uploaded" | "error";
 type SubmitState = "idle" | "preparing" | "review" | "submitting" | "pending" | "unknown" | "success" | "error";
-interface StoredOperation { id: string; account: string; chainId: number; createdAt: number; hash?: string; }
+
 
 function Icon({ name }: { name: "image" | "wallet" | "chevron" | "check" | "external" | "close" | "spinner" }) {
   const common = { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
@@ -89,29 +94,6 @@ function errorMessage(error: unknown) {
   return "Something went wrong. Please try again.";
 }
 
-function parseStoredOperation(raw: string): StoredOperation | null {
-  try {
-    const operation = JSON.parse(raw) as Partial<StoredOperation>;
-    if (typeof operation.id === "string" && operation.id && typeof operation.account === "string" && operation.account && operation.chainId === PONS_CHAIN_ID && Number.isFinite(operation.createdAt)) return operation as StoredOperation;
-  } catch { /* Invalid markers still block launching. */ }
-  return null;
-}
-
-function removeOwnedOperation(id: string): StoredOperation | null {
-  try {
-    const raw = window.localStorage.getItem(OPERATION_KEY);
-    if (!raw) return null;
-    const current = raw ? parseStoredOperation(raw) : null;
-    if (current?.id === id) {
-      window.localStorage.removeItem(OPERATION_KEY);
-      return null;
-    }
-    return current || { id: "invalid", account: "Unknown", chainId: PONS_CHAIN_ID, createdAt: Date.now() };
-  } catch {
-    return { id: "invalid", account: "Unknown", chainId: PONS_CHAIN_ID, createdAt: Date.now() };
-  }
-}
-
 function normalizeSocialUrl(value: string, host?: string) {
   const clean = value.trim();
   if (!clean) return "";
@@ -120,7 +102,8 @@ function normalizeSocialUrl(value: string, host?: string) {
   return `https://${host && !withoutScheme.includes(".") ? `${host}/${withoutScheme}` : withoutScheme}`;
 }
 
-export default function PonsLaunchpad() {
+export interface PonsLaunchpadProps { proEnabled?: boolean; proPanel?: ReactNode; launchEnabled?: boolean; }
+export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled=false}: PonsLaunchpadProps) {
   const [protocol, setProtocol] = useState<ProtocolState | null>(null);
   const [protocolError, setProtocolError] = useState("");
   const [protocolLoading, setProtocolLoading] = useState(true);
@@ -140,7 +123,7 @@ export default function PonsLaunchpad() {
   const [submitError, setSubmitError] = useState("");
   const [txHash, setTxHash] = useState("");
   const [receipt, setReceipt] = useState<LaunchReceipt | null>(null);
-  const [storedOperation, setStoredOperation] = useState<StoredOperation | null>(null);
+  const [storedOperation, setStoredOperation] = useState<LaunchOperation | null>(null);
   const [nodeSession, setNodeSession] = useState<NodeSession | null>(null);
   const uploadSequence = useRef(0);
   const uploadController = useRef<AbortController | null>(null);
@@ -150,6 +133,9 @@ export default function PonsLaunchpad() {
   const wasModalOpenRef = useRef(false);
   const reviewButtonRef = useRef<HTMLButtonElement | null>(null);
   const prepareGeneration = useRef(0);
+  const walletRef=useRef(wallet);walletRef.current=wallet;
+  const [recoveryBusy,setRecoveryBusy]=useState(false);
+  const enabledRef=useRef(launchEnabled);enabledRef.current=launchEnabled;
 
   const invalidateReview = useCallback(() => {
     prepareGeneration.current += 1;
@@ -188,37 +174,19 @@ export default function PonsLaunchpad() {
     }
   }, []);
 
+  useEffect(() => { void loadProtocol(); void reloadWallet(false); },[loadProtocol,reloadWallet]);
   useEffect(() => {
-    void loadProtocol();
-    void reloadWallet(false);
-    let raw: string | null = null;
-    try { raw = window.localStorage.getItem(OPERATION_KEY); } catch { /* The send callback verifies persistence before submitting. */ }
-    if (raw) {
-      const operation = parseStoredOperation(raw) || { id: "invalid", account: "Unknown", chainId: PONS_CHAIN_ID, createdAt: Date.now() };
-      setStoredOperation(operation);
-      setTxHash(operation.hash || "");
-      setSubmitState("unknown");
-    }
-  }, [loadProtocol, reloadWallet]);
-
-  useEffect(() => {
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key !== OPERATION_KEY) return;
-      invalidateReview();
-      if (!event.newValue) {
-        setStoredOperation(null);
-        setTxHash("");
-        setSubmitState((current) => current === "unknown" ? "idle" : current);
-        return;
-      }
-      const operation = parseStoredOperation(event.newValue) || { id: "invalid", account: "Unknown", chainId: PONS_CHAIN_ID, createdAt: Date.now() };
-      setStoredOperation(operation);
-      setTxHash(operation.hash || "");
-      setSubmitState("unknown");
+    invalidateReview();setReceipt(null);setTxHash("");setStoredOperation(null);setSubmitState("idle");
+    if(!wallet)return;
+    const read=()=>{
+      try {const current=getLaunchOperation(wallet.account);setStoredOperation(current);setTxHash(current?.hash||"");if(current)setSubmitState("unknown");}
+      catch(error){setSubmitError(errorMessage(error));setSubmitState("unknown");}
     };
-    window.addEventListener("storage", handleStorage);
-    return () => window.removeEventListener("storage", handleStorage);
-  }, [invalidateReview]);
+    read();
+    const storage=(event:StorageEvent)=>{if(event.key===launchOperationKey(wallet.account)){invalidateReview();read();}};
+    window.addEventListener("storage",storage);return ()=>window.removeEventListener("storage",storage);
+  },[wallet?.account,invalidateReview]);
+  useEffect(()=>{if(!launchEnabled)invalidateReview();},[launchEnabled,invalidateReview]);
 
   useEffect(() => {
     return onWalletChange(() => {
@@ -295,12 +263,13 @@ export default function PonsLaunchpad() {
     if (draft.symbol.trim().length > 16) return "Ticker must be 16 characters or fewer.";
     if (!/^[A-Za-z0-9]+$/.test(draft.symbol.trim())) return "Ticker may contain only letters and numbers.";
     if (draft.description.length > 280) return "Description must be 280 characters or fewer.";
-    if (!draft.logo) return imageState === "uploading" ? "Wait for the image upload to finish." : "Upload a token image.";
+    if (!draft.logo) return imageState === "uploading" ? "Wait for the image upload to finish." : "Provide a token image URI.";
+    try {validateImageUri(draft.logo);}catch(error){return errorMessage(error);}
     if (!selectedConfig?.enabled) return "Choose an available launch configuration.";
     if (!/^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/.test(draft.developerBuyEth)) return "Developer buy must be a non-negative ETH amount with up to 18 decimals.";
     if (draft.creatorFeeRecipient && !utils.isAddress(draft.creatorFeeRecipient)) return "Enter a valid fee recipient address.";
     if (draft.creatorTaxBps < 0 || draft.creatorTaxBps > (protocol?.maxCreatorTaxBps ?? 0)) return `Creator tax must be between 0 and ${(protocol?.maxCreatorTaxBps ?? 0) / 100}%.`;
-    if (draft.slippageBps < 0 || draft.slippageBps > 500) return "Slippage must be between 0% and 5%.";
+    if (draft.slippageBps < 0 || draft.slippageBps > 200) return "Slippage must be between 0% and 2%.";
     if (exemptions.length > 32) return "Use no more than 32 exemptions.";
     if (exemptions.some((address) => !utils.isAddress(address))) return "Every exemption must be a valid address.";
     if (new Set(exemptions.map((address) => address.toLowerCase())).size !== exemptions.length) return "Remove duplicate exemption addresses.";
@@ -311,6 +280,7 @@ export default function PonsLaunchpad() {
   }, [draft, exemptions, imageState, protocol, selectedConfig]);
 
   const uploadImage = useCallback(async (file: File) => {
+    if(!proEnabled)return;
     if (!IMAGE_TYPES.has(file.type)) {
       setImageState("error");
       setImageError("Choose a PNG, JPEG, or WebP image.");
@@ -318,7 +288,7 @@ export default function PonsLaunchpad() {
     }
     if (file.size > MAX_IMAGE_BYTES) {
       setImageState("error");
-      setImageError("Image must be 5 MB or smaller.");
+      setImageError("Image must be 4 MB or smaller.");
       return;
     }
     const sequence = ++uploadSequence.current;
@@ -343,7 +313,7 @@ export default function PonsLaunchpad() {
       setImageState("error");
       setImageError(errorMessage(error));
     }
-  }, [previewUrl, updateDraft]);
+  }, [previewUrl, updateDraft, proEnabled]);
 
   const removeImage = useCallback(() => {
     uploadSequence.current += 1;
@@ -355,7 +325,7 @@ export default function PonsLaunchpad() {
     setImageError("");
     updateDraft("logo", "");
     if (fileInput.current) fileInput.current.value = "";
-  }, [previewUrl, updateDraft]);
+  }, [previewUrl, updateDraft, proEnabled]);
 
   async function handleConnect() {
     setWalletBusy(true);
@@ -383,7 +353,8 @@ export default function PonsLaunchpad() {
   }
 
   async function handlePrepare() {
-    if (!wallet || validationError || imageState !== "uploaded") return;
+    if (!launchEnabled) return;
+    if (!wallet || validationError || !draft.logo.trim() || imageState === "uploading") return;
     if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) previousFocusRef.current = document.activeElement;
     const generation = prepareGeneration.current + 1;
     prepareGeneration.current = generation;
@@ -411,66 +382,58 @@ export default function PonsLaunchpad() {
   }
 
   async function handleExecute() {
+    if (!launchEnabled) return;
     if (!prepared || !wallet || submitState !== "review") return;
     setSubmitState("submitting");
     setSubmitError("");
-    let observedHash = "";
-    const operation: StoredOperation = { id: utils.hexlify(utils.randomBytes(16)), account: prepared.account, chainId: prepared.chainId, createdAt: Date.now() };
+    const account=wallet.account;
     try {
-      const result = await executePreparedLaunch(prepared, wallet, (hash: string) => {
-        observedHash = hash;
-        const hashedOperation = { ...operation, hash };
-        setStoredOperation(hashedOperation);
-        try { window.localStorage.setItem(OPERATION_KEY, JSON.stringify(hashedOperation)); } catch { /* State still blocks this session. */ }
-        setTxHash(hash);
-        setSubmitState("pending");
-      }, () => {
-        // This callback runs after final validation and immediately before the wallet send.
-        // Failing closed prevents a send that cannot be remembered across a reload.
-        const existing = window.localStorage.getItem(OPERATION_KEY);
-        if (existing) {
-          const foreign = parseStoredOperation(existing) || { id: "invalid", account: "Unknown", chainId: PONS_CHAIN_ID, createdAt: Date.now() };
-          setStoredOperation(foreign);
-          setTxHash(foreign.hash || "");
-          throw new PonsSubmissionError("A launch transaction is pending in another tab.", "unknown");
-        }
-        window.localStorage.setItem(OPERATION_KEY, JSON.stringify(operation));
-        setStoredOperation(operation);
-      });
-      setReceipt(result);
-      setTxHash(result.transactionHash);
-      setStoredOperation(removeOwnedOperation(operation.id));
-      setSubmitState("success");
-    } catch (error) {
-      const message = errorMessage(error);
-      const submissionState = (error as { submissionState?: "not-submitted" | "unknown" | "reverted" } | null)?.submissionState;
-      setSubmitError(message);
-      if (submissionState === "not-submitted" || submissionState === "reverted") {
-        const remaining = removeOwnedOperation(operation.id);
-        setStoredOperation(remaining);
-        setTxHash(remaining?.hash || "");
-        setSubmitState(remaining ? "unknown" : "error");
-      } else {
-        setSubmitState("unknown");
-      }
-      if (!observedHash) setPrepared(null);
+      const result=await executePreparedLaunch(prepared,wallet,hash=>{
+        if(walletRef.current?.account!==account)return;
+        setTxHash(hash);setStoredOperation(getLaunchOperation(account));setSubmitState("pending");
+      },()=>{if(!enabledRef.current)throw new Error("Live launching is no longer enabled.");});
+      if(walletRef.current?.account!==account)return;
+      setReceipt(result);setTxHash(result.transactionHash);setStoredOperation(null);setSubmitState("success");
+    }catch(error){
+      if(walletRef.current?.account!==account)return;
+      setSubmitError(errorMessage(error));
+      const state=(error as {submissionState?:string}).submissionState;
+      setSubmitState(state==='not-submitted'||state==='reverted'?"error":"unknown");
+      try {const op=getLaunchOperation(account);setStoredOperation(op && op.status!=='reverted' && op.status!=='confirmed'?op:null);setTxHash(op?.hash||"");}catch{setSubmitState("unknown");}
+      setPrepared(null);
     }
+  }
+  async function recheckLaunch() {
+    if(!wallet || recoveryBusy)return;
+    const account=wallet.account;setRecoveryBusy(true);setSubmitError("");
+    try {
+      const checked=await recoverLaunch(account);
+      if(walletRef.current?.account!==account)return;
+      if(checked.receipt){setReceipt(checked.receipt);setStoredOperation(null);setTxHash(checked.receipt.transactionHash);setSubmitState("success");}
+      else if(checked.operation.status==='reverted'){setStoredOperation(null);setSubmitState("error");setSubmitError("Launch reverted onchain. Gas was spent; you may prepare a fresh launch.");}
+      else{setStoredOperation(checked.operation);setSubmitError(checked.operation.hash?"Waiting for two canonical confirmations. Do not resubmit.":"No transaction hash was returned. Export the recovery record and reconcile wallet activity; do not resubmit.");}
+    }catch(error){if(walletRef.current?.account===account)setSubmitError(errorMessage(error));}
+    finally{setRecoveryBusy(false);}
+  }
+  function downloadRecovery() {
+    if(!wallet)return;
+    try {const blob=new Blob([exportLaunchRecovery(wallet.account)],{type:"application/json"});const uri=URL.createObjectURL(blob);const a=document.createElement("a");a.href=uri;a.download="hoodlaunch-recovery.json";a.click();URL.revokeObjectURL(uri);}catch(error){setSubmitError(errorMessage(error));}
   }
 
   const wrongChain = Boolean(wallet && wallet.chainId !== PONS_CHAIN_ID);
   const formBusy = ["preparing", "submitting", "pending", "unknown"].includes(submitState) || Boolean(storedOperation);
-  const mainAction = !wallet
+  const mainAction = !launchEnabled ? {label:"Live launching is not enabled yet",action:()=>undefined,disabled:true} : !wallet
     ? { label: walletBusy ? "Connecting…" : "Connect wallet", action: handleConnect, disabled: walletBusy }
     : wrongChain
       ? { label: walletBusy ? "Switching…" : "Switch to PONS Mainnet", action: handleSwitch, disabled: walletBusy }
       : !wallet.canLaunch
         ? { label: "Wallet not eligible to launch", action: () => undefined, disabled: true }
-        : { label: storedOperation || submitState === "unknown" ? "Launch status unresolved" : submitState === "preparing" ? "Simulating launch…" : "Review launch", action: handlePrepare, disabled: Boolean(validationError || formBusy || protocolLoading || imageState !== "uploaded") };
+        : { label: storedOperation || submitState === "unknown" ? "Launch status unresolved" : submitState === "preparing" ? "Simulating launch…" : "Review launch", action: handlePrepare, disabled: Boolean(validationError || formBusy || protocolLoading || !draft.logo.trim() || imageState === "uploading") };
 
   return (
     <main className={styles.page}>
       <nav className={styles.nav} aria-label="Primary navigation">
-        <a className={styles.brand} href="https://www.ponsfamily.com" target="_blank" rel="noreferrer" aria-label="Open PONS Family website"><span className={styles.brandMark}>F</span><span>Forge</span></a>
+        <a className={styles.brand} href="https://launch.hoodrich.rip" target="_blank" rel="noreferrer" aria-label="Open Hoodlaunch website"><span className={styles.brandMark}>H</span><span>Hoodlaunch</span></a>
         <div className={styles.navCenter}><span className={styles.product}>PONS V2</span><span className={styles.networkDot} /> Mainnet</div>
         {wallet ? (
           <button className={styles.walletButton} type="button" onClick={wrongChain ? handleSwitch : undefined} disabled={walletBusy}>
@@ -479,7 +442,9 @@ export default function PonsLaunchpad() {
         ) : <button className={styles.walletButton} type="button" onClick={handleConnect} disabled={walletBusy}><Icon name="wallet" />{walletBusy ? "Connecting…" : "Connect"}</button>}
       </nav>
 
-      <NodeManager onSessionChange={setNodeSession} />
+      {proPanel}
+      {!launchEnabled && <p className={styles.pendingNotice} role="status">Launch preview — live launching is not enabled yet.</p>}
+      {proEnabled && launchEnabled && <NodeManager onSessionChange={setNodeSession} />}
 
       <section id="launch" className={styles.shell} aria-labelledby="launch-title">
         <div className={styles.formPane}>
@@ -500,7 +465,7 @@ export default function PonsLaunchpad() {
 
           <div className={styles.field}>
             <span>Token image</span>
-            <div
+            {proEnabled && <div
               className={`${styles.dropzone} ${dragging ? styles.dragging : ""}`}
               onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
               onDragLeave={() => setDragging(false)}
@@ -509,13 +474,14 @@ export default function PonsLaunchpad() {
               {previewUrl ? <img className={styles.imagePreview} src={previewUrl} alt="Selected token artwork preview" /> : <span className={styles.imagePlaceholder}><Icon name="image" /></span>}
               <div className={styles.uploadCopy}>
                 <button type="button" className={styles.textButton} onClick={() => fileInput.current?.click()}>{previewUrl ? "Replace image" : "Choose image"}</button>
-                <small>PNG, JPEG or WebP · 5 MB max</small>
+                <small>PNG, JPEG or WebP · 4 MB max</small>
                 {imageState === "uploading" && <span className={styles.uploadStatus}><Icon name="spinner" /> Uploading securely…</span>}
                 {imageState === "uploaded" && <span className={styles.successText}><Icon name="check" /> Uploaded</span>}
               </div>
               {previewUrl && <button type="button" className={styles.removeImage} onClick={removeImage} aria-label="Remove token image"><Icon name="close" /></button>}
               <input ref={fileInput} className={styles.hiddenInput} type="file" accept="image/png,image/jpeg,image/webp" onChange={(event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (file) void uploadImage(file); }} aria-label="Choose token image" />
-            </div>
+            </div>}
+            <label className={styles.field}><span>Existing image URI</span><input value={draft.logo} maxLength={2048} placeholder="ipfs://… or https://…" aria-label="Token image URI" onChange={event=>{uploadSequence.current++;uploadController.current?.abort();if(previewUrl)URL.revokeObjectURL(previewUrl);setPreviewUrl("");setSelectedImage(null);setImageState("idle");setImageError("");updateDraft("logo",event.target.value);}} /><small>Use an existing public image. Pro adds managed uploads.</small></label>
             {imageState === "error" && <div className={styles.inlineError} role="alert"><span>{imageError}</span>{selectedImage && <button type="button" onClick={() => void uploadImage(selectedImage)}>Retry upload</button>}</div>}
           </div>
 
@@ -541,7 +507,7 @@ export default function PonsLaunchpad() {
               <label className={styles.field}><span>Fee recipient <small>defaults to connected wallet</small></span><input value={draft.creatorFeeRecipient} onChange={(event) => updateDraft("creatorFeeRecipient", event.target.value)} placeholder="0x…" autoComplete="off" /></label>
               <div className={styles.twoFields}>
                 <label className={styles.field}><span>Creator tax (%)</span><input type="number" min="0" max={(protocol?.maxCreatorTaxBps ?? 0) / 100} step="0.01" value={draft.creatorTaxBps / 100} onChange={(event) => updateDraft("creatorTaxBps", Math.round(Number(event.target.value || 0) * 100))} /></label>
-                <label className={styles.field}><span>Slippage (%)</span><input type="number" min="0" max="5" step="0.01" value={draft.slippageBps / 100} onChange={(event) => updateDraft("slippageBps", Math.round(Number(event.target.value || 0) * 100))} /></label>
+                <label className={styles.field}><span>Slippage (%)</span><input type="number" min="0" max="2" step="0.01" value={draft.slippageBps / 100} onChange={(event) => updateDraft("slippageBps", Math.round(Number(event.target.value || 0) * 100))} /></label>
               </div>
               <label className={styles.checkField}><input type="checkbox" checked={draft.buybackEnabled} onChange={(event) => updateDraft("buybackEnabled", event.target.checked)} /><span><strong>Enable buyback</strong><small>Use the protocol’s configured buyback behavior.</small></span></label>
               <div className={styles.twoFields}>
@@ -555,7 +521,7 @@ export default function PonsLaunchpad() {
           <div className={styles.actionArea}>
             {validationError && wallet && !wrongChain && <p className={styles.validationHint}>{validationError}</p>}
             {submitState === "error" && <div className={styles.alert} role="alert"><span>{submitError}</span><button type="button" onClick={handlePrepare}>Retry</button></div>}
-            {submitState === "unknown" && <div className={styles.pendingNotice} role="status"><strong>Launch status is unresolved.</strong><span>Do not resubmit. Check your wallet{txHash ? " or the explorer" : " activity"} before taking any action.</span>{txHash && <><code>{txHash}</code><a href={`${PONS_EXPLORER}/tx/${txHash}`} target="_blank" rel="noreferrer">Check transaction <Icon name="external" /></a></>}</div>}
+            {submitState === "unknown" && <div className={styles.pendingNotice} role="status"><strong>Launch status is unresolved.</strong><button type="button" onClick={recheckLaunch} disabled={recoveryBusy}>{recoveryBusy?"Checking chain…":"Recheck launch status"}</button><button type="button" onClick={downloadRecovery} disabled={!storedOperation}>Export recovery record</button>{submitError && <span role="alert">{submitError}</span>}<span>Do not resubmit. Check your wallet{txHash ? " or the explorer" : " activity"} before taking any action.</span>{txHash && <><code>{txHash}</code><a href={`${PONS_EXPLORER}/tx/${txHash}`} target="_blank" rel="noreferrer">Check transaction <Icon name="external" /></a></>}</div>}
             <div className={styles.feeLine}><span>ETH pair · live protocol fee</span><strong>{protocolLoading ? "Loading…" : `${formatEth(protocol?.launchFeeWei)} ETH`}</strong></div>
             <button ref={reviewButtonRef} className={styles.primaryButton} type="button" onClick={mainAction.action} disabled={mainAction.disabled}>{mainAction.label}</button>
           </div>
@@ -582,7 +548,7 @@ export default function PonsLaunchpad() {
         </aside>
       </section>
 
-      <NodeTrading session={nodeSession} launchedTokenAddress={receipt?.tokenAddress || ""} />
+      {proEnabled && launchEnabled && <NodeTrading session={nodeSession} launchedTokenAddress={receipt?.tokenAddress || ""} />}
 
       {prepared && submitState === "review" && <div className={styles.modalBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) invalidateReview(); }}>
         <section ref={modalRef} className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="review-title" tabIndex={-1} onKeyDown={handleModalKeyDown}>

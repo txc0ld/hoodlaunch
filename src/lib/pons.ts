@@ -1,4 +1,5 @@
 import { BigNumber, providers, utils, constants } from 'ethers';
+import { LAUNCH_FACTORY_HASH, LAUNCH_ROUTER_HASH, verifyRuntime } from './trusted-runtime';
 import { FACTORY_ABI, ROUTER_ABI } from './pons-abi';
 import type { LaunchConfig, ProtocolState, WalletState, LaunchDraft, PreparedLaunch, LaunchReceipt } from './pons-types';
 
@@ -48,8 +49,7 @@ function configValue(id: string, c: utils.Result): LaunchConfig {
   return { id, supplyWei: c.supply.toString(), curveFeeBps: Number(c.curveFeeBps), phantomQuoteWei: c.phantomQuote.toString(), graduationThresholdWei: c.graduationThreshold.toString(), poolFee: Number(c.poolFee), tickSpacing: Number(c.tickSpacing), enabled: c.enabled };
 }
 async function codeCheck(provider: providers.Provider, withRouter: boolean): Promise<void> {
-  const codes = await Promise.all([provider.getCode(PONS_FACTORY), ...(withRouter ? [provider.getCode(PONS_ROUTER)] : [])]);
-  if (codes.some(code => code === '0x' || code === '0x0')) fail('PONS contracts are unavailable on this network.');
+  await Promise.all([verifyRuntime(provider, PONS_FACTORY, LAUNCH_FACTORY_HASH), ...(withRouter ? [verifyRuntime(provider, PONS_ROUTER, LAUNCH_ROUTER_HASH)] : [])]);
 }
 export async function getProtocolState(): Promise<ProtocolState> {
   try {
@@ -126,6 +126,11 @@ function url(value: string, label: string, ipfs = false): string {
   } catch { /* Return the same clear validation error for malformed URLs. */ }
   return fail(`${label} must use ${ipfs ? 'ipfs:// or ' : ''}https://.`);
 }
+export function validateImageUri(value: string): string {
+  const clean = url(value, 'Image URI', true);
+  if (!clean) fail('Provide a permanent image URI.');
+  return clean;
+}
 function validate(draft: LaunchDraft, account: string) {
   const name = textValue(draft.name, 'Name', 64, true);
   const symbol = textValue(draft.symbol, 'Symbol', 16, true);
@@ -137,7 +142,7 @@ function validate(draft: LaunchDraft, account: string) {
   if (!/^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/.test(draft.developerBuyEth)) fail('Developer buy must be an ETH amount with at most 18 decimal places.');
   const buy = utils.parseEther(draft.developerBuyEth);
   if (!Number.isInteger(draft.creatorTaxBps) || draft.creatorTaxBps < 0 || draft.creatorTaxBps > 10000) fail('Creator tax must be a valid basis-point amount.');
-  if (!Number.isInteger(draft.slippageBps) || draft.slippageBps < 0 || draft.slippageBps > 500) fail('Slippage must be between 0 and 500 basis points (5%).');
+  if (!Number.isInteger(draft.slippageBps) || draft.slippageBps < 0 || draft.slippageBps > 200) fail('Slippage must be between 0 and 200 basis points (2%).');
   if (typeof draft.buybackEnabled !== 'boolean') fail('Choose a valid buyback setting.');
   if (!Array.isArray(draft.exemptions) || draft.exemptions.length > 32) fail('At most 32 snipe-tax exemptions are allowed.');
   const exemptions = draft.exemptions.map(value => address(value.trim(), 'Exemption'));
@@ -167,7 +172,7 @@ export async function prepareLaunch(draft: LaunchDraft, wallet: WalletState): Pr
     wallet = { ...wallet };
     const ethereum = injected();
     const provider = await assertWallet(ethereum, wallet);
-    if (activeAccounts.has(wallet.account.toLowerCase())) fail('A launch transaction is pending or its outcome is unknown. Check the wallet and explorer before continuing.');
+    if (activeAccounts.has(wallet.account.toLowerCase()) || unresolved(wallet.account)) fail('A launch transaction is pending or its outcome is unknown. Check the wallet and explorer before continuing.');
     const valid = validate(draft, wallet.account);
     await codeCheck(provider, !valid.buy.isZero());
     const current = await terms(provider, wallet.account, draft.configId, valid.creatorTaxBps);
@@ -208,33 +213,107 @@ export class PonsSubmissionError extends Error {
     Object.setPrototypeOf(this, PonsSubmissionError.prototype);
   }
 }
-async function waitForReceipt(hash: string): Promise<providers.TransactionReceipt> {
-  // Read from the fixed chain even if the injected wallet changes networks after broadcast.
+const OPERATION_PREFIX = 'hoodrich:launch:v1:4663:';
+export interface LaunchOperation {
+  version: 1; id: string; account: string; chainId: 4663; createdAt: number;
+  status: 'pending' | 'unknown' | 'confirmed' | 'reverted'; hash?: string;
+  token: string; curve: string; configId: string; threshold: string;
+  transaction: { to: string; data: string; value: string; gasLimit: string; gasPrice: string; nonce: number };
+}
+export const launchOperationKey = (account: string): string => OPERATION_PREFIX + address(account, 'Account').toLowerCase();
+function parseOperation(raw: string, account: string): LaunchOperation {
+  try {
+    if (raw.length > 50000) throw Error();
+    const r = JSON.parse(raw) as LaunchOperation;
+    const keys = ['version','id','account','chainId','createdAt','status','token','curve','configId','threshold','transaction', ...(r.hash ? ['hash'] : [])];
+    if (Object.keys(r).length !== keys.length || !keys.every(k => Object.prototype.hasOwnProperty.call(r,k)) || r.version !== 1 || r.chainId !== 4663 ||
+      !/^0x[0-9a-f]{32}$/.test(r.id) || address(r.account,'Account') !== address(account,'Account') || !Number.isSafeInteger(r.createdAt) || r.createdAt <= 0 ||
+      !['pending','unknown','confirmed','reverted'].includes(r.status) || (r.hash !== undefined && !/^0x[0-9a-fA-F]{64}$/.test(r.hash)) ||
+      (!r.hash && ['confirmed','reverted'].includes(r.status))) throw Error();
+    address(r.token,'Token'); address(r.curve,'Curve');
+    const tx = r.transaction;
+    if (!tx || Object.keys(tx).sort().join() !== 'data,gasLimit,gasPrice,nonce,to,value' ||
+      ![PONS_FACTORY.toLowerCase(),PONS_ROUTER.toLowerCase()].includes(tx.to.toLowerCase()) || !/^0x[0-9a-fA-F]+$/.test(tx.data) || tx.data.length > 40000 ||
+      !Number.isSafeInteger(tx.nonce) || tx.nonce < 0) throw Error();
+    for (const n of [r.configId,r.threshold,tx.value,tx.gasLimit,tx.gasPrice]) if (typeof n !== 'string' || !/^(0|[1-9]\d{0,77})$/.test(n) || BigNumber.from(n).gt(constants.MaxUint256)) throw Error();
+    if (BigNumber.from(tx.gasLimit).lte(0) || BigNumber.from(tx.gasPrice).lte(0)) throw Error();
+    const routed = tx.to.toLowerCase() === PONS_ROUTER.toLowerCase();
+    const decoded = (routed ? router : factory).parseTransaction({data:tx.data,value:tx.value});
+    if (decoded.name !== (routed ? 'launchAndBuy' : 'launchToken') || !decoded.args.launchConfigId.eq(r.configId) || decoded.args.pairToken !== ZERO ||
+      (routed && decoded.args.recipient.toLowerCase() !== r.account.toLowerCase())) throw Error();
+    return Object.freeze({...r, transaction:Object.freeze({...tx})});
+  } catch { return fail('Launch recovery data is invalid. Preserve it and reconcile the account before another launch.'); }
+}
+export function getLaunchOperation(account: string): LaunchOperation | null {
+  try { const raw = window.localStorage.getItem(launchOperationKey(account)); return raw ? parseOperation(raw,account) : null; }
+  catch { return fail('Launch recovery storage is unavailable or invalid. No new launch can be submitted.'); }
+}
+function saveOperation(operation: LaunchOperation): void {
+  const raw = JSON.stringify(operation); parseOperation(raw,operation.account);
+  try { const key = launchOperationKey(operation.account); window.localStorage.setItem(key,raw); if(window.localStorage.getItem(key)!==raw)throw Error(); }
+  catch { fail('Could not persist launch recovery information. Do not retry an uncertain launch.'); }
+}
+function unresolved(account: string): boolean { const r=getLaunchOperation(account); return Boolean(r && r.status !== 'confirmed' && r.status !== 'reverted'); }
+export function exportLaunchRecovery(account: string): string {
+  const operation=getLaunchOperation(account); if(!operation) return fail('No launch recovery record exists.'); return JSON.stringify(operation,null,2);
+}
+async function confirmedReceipt(provider: providers.JsonRpcProvider, operation: LaunchOperation): Promise<providers.TransactionReceipt | null> {
+  if(!operation.hash)return null;
+  await chain(provider);
+  const receipt=await provider.getTransactionReceipt(operation.hash);
+  if(!receipt)return null;
+  if(!Number.isSafeInteger(receipt.blockNumber) || receipt.blockNumber<0 || !/^0x[0-9a-fA-F]{64}$/.test(receipt.blockHash))fail('Invalid launch receipt block.');
+  const [tx,block,head]=await Promise.all([provider.getTransaction(operation.hash),provider.getBlock(receipt.blockNumber),provider.getBlockNumber()]);
+  if(!tx || !block || block.hash!==receipt.blockHash || !Number.isSafeInteger(head) || head<receipt.blockNumber+1 || receipt.confirmations<2)return null;
+  const expected=operation.transaction;
+  if(tx.blockHash!==receipt.blockHash || tx.blockNumber!==receipt.blockNumber || tx.hash.toLowerCase()!==operation.hash.toLowerCase() || tx.chainId!==4663 || tx.from.toLowerCase()!==operation.account.toLowerCase() ||
+    tx.to?.toLowerCase()!==expected.to.toLowerCase() || tx.data!==expected.data || !tx.value.eq(expected.value) || tx.nonce!==expected.nonce ||
+    !tx.gasLimit.eq(expected.gasLimit) || !tx.gasPrice?.eq(expected.gasPrice))fail('The mined transaction does not match the persisted launch intent.');
+  validateReceipt(receipt,operation.hash,{account:operation.account,transaction:expected});
+  await Promise.all([verifyRuntime(provider,PONS_FACTORY,LAUNCH_FACTORY_HASH,receipt.blockNumber),
+    ...(expected.to.toLowerCase()===PONS_ROUTER.toLowerCase()?[verifyRuntime(provider,PONS_ROUTER,LAUNCH_ROUTER_HASH,receipt.blockNumber)]:[])]);
+  const canonical=await provider.getBlock(receipt.blockNumber); await chain(provider);
+  if(!canonical || canonical.hash!==receipt.blockHash)return null;
+  return receipt;
+}
+function recoveredResult(receipt: providers.TransactionReceipt, operation: LaunchOperation): LaunchReceipt {
+  return receiptResult(receipt,{account:operation.account,configId:operation.configId},
+    {token:operation.token,curve:operation.curve,threshold:operation.threshold});
+}
+export async function recoverLaunch(account: string): Promise<{operation:LaunchOperation;receipt?:LaunchReceipt}> {
+  if(!navigator.locks)fail('Browser transaction locking is required for recovery.');
+  return navigator.locks.request(launchOperationKey(account),{mode:'exclusive',ifAvailable:true},async lock=>{
+    if(!lock)fail('Another tab is handling this account launch.');
+    const old=getLaunchOperation(account);if(!old) return fail('No launch recovery record exists.');
+    if(!old.hash) return {operation:old}; // Hashless uncertainty cannot be safely cleared automatically.
+    const provider=new providers.JsonRpcProvider({url:PONS_RPC,timeout:15000});
+    try {
+      const checking:LaunchOperation={...old,status:'unknown'};saveOperation(checking);
+      const receipt=await confirmedReceipt(provider,old);
+      if(!receipt)return {operation:checking};
+      const result=receipt.status===1?recoveredResult(receipt,old):undefined;
+      const next:LaunchOperation={...old,status:receipt.status===1?'confirmed':'reverted'};
+      saveOperation(next);activeAccounts.delete(account.toLowerCase());
+      return {operation:next,...(result?{receipt:result}:{})};
+    }finally{provider.removeAllListeners();}
+  });
+}
+async function waitForReceipt(operation: LaunchOperation): Promise<providers.TransactionReceipt> {
   const provider = new providers.JsonRpcProvider({ url: PONS_RPC, timeout: 15000 });
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined; let stopped = false;
   const poll = async (): Promise<providers.TransactionReceipt> => {
     while (!stopped) {
-      await chain(provider);
-      if (stopped) break;
-      const receipt = await provider.getTransactionReceipt(hash);
-      if (stopped) break;
-      if (receipt) return receipt;
+      const receipt=await confirmedReceipt(provider,operation);
+      if(stopped)break;if(receipt)return receipt;
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
     throw new Error('Receipt confirmation timed out.');
   };
-  try {
-    return await Promise.race([poll(), new Promise<never>((_, reject) => {
-      timer = setTimeout(() => { stopped = true; reject(new Error('Receipt confirmation timed out.')); }, 120000);
-    })]);
-  } finally {
-    stopped = true;
-    if (timer !== undefined) clearTimeout(timer);
-    provider.removeAllListeners();
-  }
+  try { return await Promise.race([poll(), new Promise<never>((_, reject) => {
+    timer=setTimeout(()=>{stopped=true;reject(new Error('Receipt confirmation timed out.'));},120000);
+  })]); }finally{stopped=true;if(timer!==undefined)clearTimeout(timer);provider.removeAllListeners();}
 }
-function validateReceipt(receipt: providers.TransactionReceipt, hash: string, prepared: PreparedLaunch): void {
+function validateReceipt(receipt: providers.TransactionReceipt, hash: string, prepared: Pick<PreparedLaunch, 'account' | 'transaction'>): void {
   if (typeof receipt.transactionHash !== 'string' || receipt.transactionHash.toLowerCase() !== hash.toLowerCase()
     || typeof receipt.from !== 'string' || receipt.from.toLowerCase() !== prepared.account.toLowerCase()
     || typeof receipt.to !== 'string' || receipt.to.toLowerCase() !== prepared.transaction.to.toLowerCase()
@@ -242,7 +321,7 @@ function validateReceipt(receipt: providers.TransactionReceipt, hash: string, pr
     fail('Receipt does not match the submitted launch. Check the explorer; do not resend.');
   }
 }
-function receiptResult(receipt: providers.TransactionReceipt, prepared: PreparedLaunch, record: Preparation): LaunchReceipt {
+function receiptResult(receipt: providers.TransactionReceipt, prepared: Pick<PreparedLaunch, 'account' | 'configId'>, record: Pick<Preparation, 'token' | 'curve' | 'threshold'>): LaunchReceipt {
   if (!Array.isArray(receipt.logs)) fail('Launch receipt logs are unavailable. Check the explorer; do not resend.');
   for (const log of receipt.logs) {
     if (log.address.toLowerCase() !== PONS_FACTORY.toLowerCase()) continue;
@@ -260,9 +339,9 @@ export async function executePreparedLaunch(prepared: PreparedLaunch, wallet: Wa
   if (!locks?.request) throw new PonsSubmissionError('This browser cannot safely coordinate launch confirmations across tabs. Use a browser with Web Locks support.', 'not-submitted');
   let entered = false;
   try {
-    // Same global key as the UI's durable marker: all accounts and tabs share one launch intent.
+    // Account and chain scope prevent one customer's unresolved launch blocking another wallet.
     // ifAvailable prevents stale confirmations from queueing behind another tab's wallet prompt.
-    return await locks.request('pons-v2:launch-operation', { mode: 'exclusive', ifAvailable: true }, async lock => {
+    return await locks.request(launchOperationKey(prepared.account), { mode: 'exclusive', ifAvailable: true }, async lock => {
       if (!lock) throw new PonsSubmissionError('A launch confirmation is active in another tab. Check its status before continuing.', 'unknown');
       entered = true;
       return executeUnderLock(prepared, wallet, onHash, onSubmitting);
@@ -298,10 +377,15 @@ async function executeUnderLock(prepared: PreparedLaunch, wallet: WalletState, o
     if (estimate.balance.lt(BigNumber.from(prepared.totalValueWei).add(sentGasWei))) fail('Insufficient ETH for the launch and the full reviewed gas limit.');
     await assertWallet(record.ethereum, wallet);
     if (Date.now() - prepared.createdAt > MAX_AGE) fail('Launch review expired. Review fresh terms before confirming.');
+    if (unresolved(prepared.account)) throw new PonsSubmissionError('This account has an unresolved launch. Recheck its recovery record.', 'unknown');
+    const [nonce, latestNonce] = await Promise.all([provider.getTransactionCount(prepared.account,'pending'),provider.getTransactionCount(prepared.account,'latest')]);
+    if (nonce!==latestNonce) fail('This account has a pending transaction. Wait before launching.');
+    await assertWallet(record.ethereum,wallet);
+    if(Date.now()-prepared.createdAt>MAX_AGE)fail('Launch review expired before submission.');
     const request = {
       from: prepared.account, to: prepared.transaction.to, data: prepared.transaction.data,
       value: utils.hexValue(BigNumber.from(prepared.totalValueWei)), gas: utils.hexValue(BigNumber.from(prepared.transaction.gasLimit)),
-      gasPrice: utils.hexValue(estimate.maxGasPrice), chainId: utils.hexValue(PONS_CHAIN_ID),
+      nonce: utils.hexValue(nonce), gasPrice: utils.hexValue(estimate.maxGasPrice), chainId: utils.hexValue(PONS_CHAIN_ID),
     };
     // Persist intent before opening the wallet. A storage/UI callback failure aborts before sending.
     try { onSubmitting?.(); } catch (error) {
@@ -309,6 +393,8 @@ async function executeUnderLock(prepared: PreparedLaunch, wallet: WalletState, o
       if (error instanceof PonsSubmissionError && error.submissionState === 'unknown') outcome = 'unknown';
       throw error;
     }
+    let operation:LaunchOperation={version:1,id:utils.hexlify(utils.randomBytes(16)),account:prepared.account,chainId:4663,createdAt:Date.now(),status:'pending',token:record.token,curve:record.curve,configId:prepared.configId,threshold:record.threshold,transaction:{to:prepared.transaction.to,data:prepared.transaction.data,value:prepared.totalValueWei,gasLimit:prepared.transaction.gasLimit,gasPrice:estimate.maxGasPrice.toString(),nonce}};
+    saveOperation(operation);
     outcome = 'unknown';
     record.state = 'submitted';
     let hash: unknown;
@@ -318,20 +404,23 @@ async function executeUnderLock(prepared: PreparedLaunch, wallet: WalletState, o
       hash = await record.ethereum.request({ method: 'eth_sendTransaction', params: [request] });
     } catch (error) {
       // Only rejection of this actual send request can prove no broadcast occurred.
-      if (errorCode(error) === 4001 || errorCode(error) === 'ACTION_REJECTED') { outcome = 'not-submitted'; record.state = 'settled'; }
+      if (errorCode(error) === 4001 || errorCode(error) === 'ACTION_REJECTED') { outcome = 'not-submitted'; record.state = 'settled'; window.localStorage.removeItem(launchOperationKey(prepared.account)); }
       throw error;
     }
     if (typeof hash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(hash)) fail('Wallet returned an invalid transaction hash.');
+    operation={...operation,hash}; saveOperation(operation);
     try { onHash?.(hash); } catch { /* A display callback cannot interrupt receipt tracking. */ }
     // Error-attached receipts and replacement objects are never proof of a terminal outcome.
-    const receipt = await waitForReceipt(hash);
+    const receipt = await waitForReceipt(operation);
     validateReceipt(receipt, hash, prepared);
     if (receipt.status === 0) {
+      saveOperation({...operation,status:'reverted'});
       outcome = 'reverted';
       record.state = 'settled';
       throw new Error('Launch transaction reverted. No launch was confirmed.');
     }
     const result = receiptResult(receipt, prepared, record);
+    saveOperation({...operation,status:'confirmed'});
     confirmedSuccess = true;
     record.state = 'settled';
     return result;

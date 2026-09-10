@@ -12,10 +12,11 @@ const TOKEN = '0x3333333333333333333333333333333333333333';
 const CURVE = '0x4444444444444444444444444444444444444444';
 const HASH = '0x' + 'ab'.repeat(32);
 const PIN = '0x' + '12'.repeat(32);
-function harness(lockState = { held: false }, browserTransform = false) {
+function harness(lockState = { held: false }, browserTransform = false, memory = new Map()) {
+  const storage = {getItem:k=>memory.get(k)||null,setItem:(k,v)=>{if(state.storageFail)throw Error('storage');memory.set(k,v);},removeItem:k=>memory.delete(k)};
   const state = { chainId: 4663, account: ACCOUNT, eligible: true, enabled: true, fee: BN.from('500000000000000'), cap: 1000, pin: PIN, gas: BN.from(100000), gasPrice: BN.from(100), balance: utils.parseEther('1000'), quote: BN.from('900719925474099312345'), sends: [], calls: [], walletCalls: [], now: 1000 };
   const locks = { request: async (name, options, callback) => {
-    assert.equal(name, 'pons-v2:launch-operation'); assert.equal(options.mode, 'exclusive'); assert.equal(options.ifAvailable, true);
+    assert.match(name,/^hoodrich:launch:v1:4663:0x[0-9a-f]{40}$/); assert.equal(options.mode, 'exclusive'); assert.equal(options.ifAvailable, true);
     if (lockState.held) return callback(null);
     lockState.held = true;
     try { return await callback({ name }); } finally { lockState.held = false; }
@@ -29,13 +30,13 @@ function harness(lockState = { held: false }, browserTransform = false) {
     let js;
     if (browserTransform) {
       const { getLoaderSWCOptions } = require('next/dist/build/swc/options');
-      const options = getLoaderSWCOptions({ filename: file, development: false, isServer: false, isServerLayer: false, pagesDir: path.join(__dirname, '../src/pages'), isPageFile: false, hasReactRefresh: false, nextConfig: {}, jsConfig: {} });
+      const options = getLoaderSWCOptions({ filename: file, relativeFilePathFromRoot: path.relative(path.join(__dirname,'..'),file), configDir: path.join(__dirname,'..'), development: false, isServer: false, isServerLayer: false, pagesDir: path.join(__dirname, '../src/pages'), isPageFile: false, hasReactRefresh: false, nextConfig: {}, jsConfig: {} });
       options.module = { type: 'commonjs' }; options.jsc.externalHelpers = false;
       js = require('next/dist/build/swc').transformSync(source, { ...options, filename: file }).code;
     } else js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
     const module = { exports: {} };
     const customRequire = id => id === 'ethers' ? { ...ethers, providers: { ...ethers.providers, Web3Provider: MockProvider, JsonRpcProvider: MockProvider } } : id.startsWith('./') ? load(id.replace('./', '')) : require(id);
-    vm.runInNewContext('(function(require,module,exports){' + js + '\n})', { window: { ethereum }, navigator: { get locks() { return state.noLocks ? undefined : locks; } }, URL, Date: { now: () => state.now }, Error, console, Uint8Array, setTimeout: (callback, ms) => { if (state.forceTimeout) { queueMicrotask(callback); return 0; } return setTimeout(callback, ms); }, clearTimeout })(customRequire, module, module.exports);
+    vm.runInNewContext('(function(require,module,exports){' + js + '\n})', { window: { ethereum, localStorage: storage }, navigator: { get locks() { return state.noLocks ? undefined : locks; } }, URL, Date: { now: () => state.now }, Error, console, Uint8Array, setTimeout: (callback, ms) => { if (state.forceTimeout) { queueMicrotask(callback); return 0; } return setTimeout(callback, ms); }, clearTimeout })(customRequire, module, module.exports);
     return cache[name] = module.exports;
   }
   const abis = load('pons-abi');
@@ -47,11 +48,15 @@ function harness(lockState = { held: false }, browserTransform = false) {
     for (const [index, value] of Object.entries(overrides)) values[Number(index)] = value;
     return { address: core.PONS_FACTORY, ...factory.encodeEventLog(factory.getEvent('TokenLaunched'), values) };
   }
-  function receipt(tx) { return { status: 1, transactionHash: HASH, from: ACCOUNT, to: tx.to, logs: [eventLog()], ...state.receipt }; }
+  function receipt(tx) { return { confirmations:2,blockNumber:100,blockHash:'0x'+'ef'.repeat(32),status: 1, transactionHash: HASH, from: ACCOUNT, to: tx.to, logs: [eventLog()], ...state.receipt }; }
   class MockProvider {
     async send(method) { assert.equal(method, 'eth_chainId'); return utils.hexValue(state.chainId); }
     removeAllListeners() { state.listenersRemoved = true; }
-    async getCode() { return state.code === undefined ? '0x1234' : state.code; }
+    async getCode(address) { return state.code === undefined ? (address.toLowerCase()===core.PONS_FACTORY.toLowerCase()?require('./fixtures/pons-trade-runtime.json').contracts[address.toLowerCase()]:require('./fixtures/pons-launch-router-runtime.json').runtimeBytecode) : state.code; }
+    async getTransactionCount(){return state.nonce||0;}
+    async getBlockNumber(){return state.head||101;}
+    async getBlock(){return {hash:state.blockHash||'0x'+'ef'.repeat(32)};}
+    async getTransaction(hash){const t=state.sends[0];return {hash,blockHash:'0x'+'ef'.repeat(32),blockNumber:100,chainId:4663,from:t.from,to:t.to,data:t.data,value:BN.from(t.value),gasLimit:BN.from(t.gas),gasPrice:BN.from(t.gasPrice),nonce:BN.from(t.nonce).toNumber(),...state.transaction};}
     async getBalance() { return state.balance; }
     async getGasPrice() { return state.gasPrice; }
     async estimateGas(tx) { state.estimated = tx; return state.gas; }
@@ -87,7 +92,7 @@ function harness(lockState = { held: false }, browserTransform = false) {
   core = load('pons');
   const wallet = { account: ACCOUNT, chainId: 4663, balanceWei: state.balance.toString(), canLaunch: true };
   const draft = { name: 'Test', symbol: 'TEST', description: 'A launch', logo: 'ipfs://bafyexample', twitter: '', telegram: '', website: 'https://example.com', discord: '', farcaster: '', configId: '0', developerBuyEth: '0', creatorFeeRecipient: '', creatorTaxBps: 0, buybackEnabled: false, slippageBps: 100, exemptions: [] };
-  return { core, state, draft, wallet, factory, router, eventLog };
+  return { core, state, draft, wallet, factory, router, eventLog, memory };
 }
 test('public protocol reads canonical chain and live config without wallet requests', async () => {
   const h = harness(); const result = await h.core.getProtocolState();
@@ -246,7 +251,7 @@ test('normal description paragraphs preserve CR/LF while unsafe control characte
   h.draft.description = 'Bad\x01control'; await assert.rejects(h.core.prepareLaunch(h.draft, h.wallet), /control/);
 });
 
-test('origin-global Web Lock excludes independent tabs until receipt processing ends', async () => {
+test('account-scoped Web Lock excludes independent tabs until receipt processing ends', async () => {
   const lock = { held: false }; const a = harness(lock); const b = harness(lock);
   const pa = await a.core.prepareLaunch(a.draft, a.wallet); const pb = await b.core.prepareLaunch(b.draft, b.wallet);
   let release, entered; const gate = new Promise(resolve => { release = resolve; }); const ready = new Promise(resolve => { entered = resolve; });
@@ -292,3 +297,44 @@ test('Next production browser ES5 transform preserves ethers config Result as on
   const p = await h.core.prepareLaunch(h.draft, h.wallet);
   assert.equal(p.totalValueWei, h.state.fee.toString());
 });
+
+
+test('launch trust anchors reject nonempty untrusted factory/router runtime before send',async()=>{
+ for(const buy of ['0','0.01']){const h=harness();h.draft.developerBuyEth=buy;h.state.code='0x00';await assert.rejects(h.core.prepareLaunch(h.draft,h.wallet),/trusted contract/);assert.equal(h.state.sends.length,0);}
+});
+test('durable intent exists with exact nonce/value/calldata before wallet send; storage failure never sends',async()=>{
+ const h=harness();const p=await h.core.prepareLaunch(h.draft,h.wallet);h.state.storageFail=true;
+ await assert.rejects(h.core.executePreparedLaunch(p,h.wallet),e=>e.submissionState==='not-submitted');assert.equal(h.state.sends.length,0);
+ h.state.storageFail=false;h.state.sendError={code:'NETWORK_ERROR'};await assert.rejects(h.core.executePreparedLaunch(p,h.wallet));
+ const op=h.core.getLaunchOperation(ACCOUNT);assert.equal(op.version,1);assert.equal(op.transaction.data,p.transaction.data);assert.equal(op.transaction.value,p.totalValueWei);assert.equal(op.transaction.nonce,0);assert.equal(op.hash,undefined);
+ const exported=h.core.exportLaunchRecovery(ACCOUNT);assert(!/privateKey|mnemonic|password/.test(exported));assert.equal(JSON.parse(exported).id,op.id);
+});
+async function interrupted(){const h=harness();const p=await h.core.prepareLaunch(h.draft,h.wallet);h.state.wait=async()=>{throw Error('interrupted');};await assert.rejects(h.core.executePreparedLaunch(p,h.wallet));h.state.wait=undefined;return h;}
+test('reload retains account-scoped intent and known-hash recovery verifies before clearing uncertainty',async()=>{
+ const old=await interrupted(),h=harness({held:false},false,old.memory);h.state.sends=old.state.sends;
+ await assert.rejects(h.core.prepareLaunch(h.draft,h.wallet),/pending|unknown/);
+ const r=await h.core.recoverLaunch(ACCOUNT);assert.equal(r.operation.status,'confirmed');assert.equal(r.receipt.tokenAddress,TOKEN);assert.equal(h.state.sends.length,1);
+ await h.core.prepareLaunch(h.draft,h.wallet);
+ const other=harness({held:false},false,old.memory);other.state.account=OTHER;other.wallet.account=OTHER;await other.core.prepareLaunch(other.draft,other.wallet);assert.equal(other.state.sends.length,0);
+});
+test('recovery waits for canonical two confirmations and rejects changed exact transaction',async()=>{
+ for(const change of [h=>h.state.receipt={confirmations:0},h=>h.state.head=100,h=>h.state.blockHash='0x'+'aa'.repeat(32)]){
+  const h=await interrupted();change(h);const r=await h.core.recoverLaunch(ACCOUNT);assert.equal(r.receipt,undefined);assert.equal(r.operation.status,'unknown');assert.equal(h.state.sends.length,1);
+ }
+ for(const transaction of [{data:'0x1234'},{value:BN.from(1)},{nonce:1},{blockHash:'0x'+'11'.repeat(32)},{gasLimit:BN.from(1)}]){const h=await interrupted();h.state.transaction=transaction;await assert.rejects(h.core.recoverLaunch(ACCOUNT),/match/);assert.equal(h.core.getLaunchOperation(ACCOUNT).status,'unknown');assert.equal(h.state.sends.length,1);}
+});
+test('recovery resolves directly verified reverted launch but never clears hashless uncertainty',async()=>{
+ const h=await interrupted();h.state.receipt={status:0};assert.equal((await h.core.recoverLaunch(ACCOUNT)).operation.status,'reverted');await h.core.prepareLaunch(h.draft,h.wallet);
+ const b=harness();const p=await b.core.prepareLaunch(b.draft,b.wallet);b.state.sendError={code:'NETWORK_ERROR'};await assert.rejects(b.core.executePreparedLaunch(p,b.wallet));assert.equal((await b.core.recoverLaunch(ACCOUNT)).operation.status,'pending');await assert.rejects(b.core.prepareLaunch(b.draft,b.wallet));assert.equal(b.state.sends.length,1);
+});
+test('corrupt or oversized persisted recovery fails closed, without an external wallet request',async()=>{
+ for(const raw of ['null','{}','x'.repeat(50001)]){const h=harness();h.memory.set(h.core.launchOperationKey(ACCOUNT),raw);await assert.rejects(h.core.prepareLaunch(h.draft,h.wallet),/storage/);assert.equal(h.state.sends.length,0);}
+});
+test('free image URI validator accepts IPFS and HTTPS but rejects executable/private URLs',()=>{
+ const h=harness();assert.equal(h.core.validateImageUri('ipfs://bafyexample'),'ipfs://bafyexample');assert.equal(h.core.validateImageUri('https://example.com/image.png'),'https://example.com/image.png');
+ for(const uri of ['','javascript:alert(1)','data:image/svg+xml,x','http://example.com/x','https://127.0.0.1/x'])assert.throws(()=>h.core.validateImageUri(uri));
+});
+
+test('terminal-looking storage never substitutes for a fresh canonical recovery result',async()=>{const h=await interrupted();const key=h.core.launchOperationKey(ACCOUNT);const record=JSON.parse(h.memory.get(key));record.status='reverted';h.memory.set(key,JSON.stringify(record));h.state.receipt={confirmations:0};const checked=await h.core.recoverLaunch(ACCOUNT);assert.equal(checked.operation.status,'unknown');assert.equal(checked.receipt,undefined);await assert.rejects(h.core.prepareLaunch(h.draft,h.wallet));assert.equal(h.state.sends.length,1);});
+
+test('launch developer buy enforces the same maximum 2% slippage boundary',async()=>{const h=harness();h.draft.developerBuyEth='0.01';h.draft.slippageBps=200;const p=await h.core.prepareLaunch(h.draft,h.wallet);assert.equal(p.minTokensOut,h.state.quote.mul(9800).div(10000).toString());h.draft.slippageBps=201;await assert.rejects(h.core.prepareLaunch(h.draft,h.wallet),/2%/);assert.equal(h.state.sends.length,0);});

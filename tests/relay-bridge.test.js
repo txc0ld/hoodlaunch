@@ -21,7 +21,9 @@ function harness(options={}) {
       assert.equal(method,'eth_sendRawTransaction');assert.equal(memory.size,1,'must persist before broadcast');if(options.broadcastFail)throw Error('uncertain');return ethers.utils.keccak256(args[0]);}
     async getBalance(node,block){assert.equal(node,wallet.address);if(this.dest)return bn(block===99?0:options.lowDestination?1:'10000000000000000');return bn(options.lowBalance?'1':'1000000000000000000');}
     async estimateGas(){if(options.forgetDuringEstimate)mutable.active=false;return bn(options.hugeGas?200000:35000);}
-    async getCode(){return options.wrongRouterCode?'0x00':require('./fixtures/relay-router-runtime.json').runtimeBytecode;}
+    async getCode(){return this.dest?(options.wrongRouterCode?'0x00':require('./fixtures/relay-router-runtime.json').runtimeBytecode):(options.wrongSourceCode?'0x00':require('./fixtures/relay-source-runtime.json').runtimeBytecode);}
+    async getBlock(){return {hash:'0x'+'aa'.repeat(32)};}
+    async getBlockNumber(){return 101;}
     async getFeeData(){if(options.prepareDelay)mutable.now+=options.prepareDelay;return {maxFeePerGas:bn(options.highFee?'200000000000':'2000000000'),maxPriorityFeePerGas:bn('1000000000')};}
     async getTransactionCount(){return options.changedNonce?2:0;}
     async getTransactionReceipt(hash){
@@ -30,7 +32,7 @@ function harness(options={}) {
         return {status:options.destinationFailure?0:1,confirmations:3,transactionHash:hash,to:fixture.protocol.v2.paymentDetails.depository,blockNumber:100,logs:options.noPayment?[]:[{address:router,...event}]};}
       if(mutable.stage==='pending')return null;
       const r=JSON.parse([...memory.values()][0]);const event=abi.encodeEventLog(abi.getEvent('RelayNativeDeposit'),[wallet.address,r.amountWei,r.orderId]);
-      return {transactionHash:hash,from:wallet.address,to:fixture.protocol.v2.paymentDetails.depository,status:1,confirmations:3,logs:options.missingDeposit?[]:[{address:fixture.protocol.v2.paymentDetails.depository,...event}]};
+      return {transactionHash:hash,from:wallet.address,to:fixture.protocol.v2.paymentDetails.depository,status:options.sourceRevert?0:1,blockNumber:100,blockHash:'0x'+'aa'.repeat(32),confirmations:3,logs:options.missingDeposit?[]:[{address:fixture.protocol.v2.paymentDetails.depository,...event}]};
     }
     async getTransaction(hash){const r=JSON.parse([...memory.values()][0]);return {hash,chainId:1,from:wallet.address,to:fixture.protocol.v2.paymentDetails.depository,nonce:0,value:bn(r.amountWei),data:abi.encodeFunctionData('depositNative',[wallet.address,r.orderId])};}
     removeAllListeners(){}
@@ -153,3 +155,16 @@ test('review expiry cannot outlive protocol deadline minus safety buffer after d
  assert.ok(r.expiresAt<=Math.floor(start/1000)*1000+61000);assert.ok(r.expiresAt<h.mutable.now+90000);
  const slow=harness({orderSeconds:91,prepareDelay:65000});await assert.rejects(prepare(slow),/deadline expired/);
 });
+
+
+test('untrusted source depository fails closed before node signing',async()=>{const h=harness({wrongSourceCode:true});await assert.rejects(prepare(h));assert.equal(h.calls.filter(x=>x==='eth_sendRawTransaction').length,0);});
+test('direct canonical reverted deposit is terminal failed and permits a fresh quote without retrying',async()=>{
+ const h=harness({sourceRevert:true});await execute(h,await prepare(h));h.mutable.stage='confirmed';const operation=await h.bridge.refreshNodeBridgeOperation(wallet.address);assert.equal(operation.status,'failed');assert.match(operation.message,/reverted/);await prepare(h);assert.equal(h.calls.filter(x=>x==='eth_sendRawTransaction').length,1);
+});
+test('vault bridge lifecycle callback revokes signing authority before broadcast',async()=>{
+ const h=harness({fixedRoot:true}),v=h.vault();const created=v.createNodeSession(1);const backup=await v.encryptNodeBackup(created,'a secure testing password');const restored=await v.restoreNodeBackup(backup,'a secure testing password');const review=await v.prepareNodeBridge(restored,0,'0.005');
+ for(const stopAt of [1,4,6]){let checks=0;const current=stopAt===1?review:await v.prepareNodeBridge(restored,0,'0.005');await assert.rejects(v.executeNodeBridge(restored,current,()=>{if(++checks===stopAt)throw Error('view cancelled');}),/cancelled/);assert.equal(h.calls.filter(x=>x==='eth_sendRawTransaction').length,0);assert.equal(h.memory.size,0);}
+ v.forgetNodeSession(created);v.forgetNodeSession(restored);
+});
+
+test('source runtime is checked again at execution, before signer callback',async()=>{const options={},h=harness(options),review=await prepare(h);options.wrongSourceCode=true;let signed=0;await assert.rejects(h.bridge.executeRelayBridge(h,review,h.assertActive,()=>{signed++;throw Error('unexpected');}));assert.equal(signed,0);assert.equal(h.calls.filter(x=>x==='eth_sendRawTransaction').length,0);});

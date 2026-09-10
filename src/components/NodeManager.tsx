@@ -8,11 +8,11 @@ import {
   isVerifiedNodeSession,
   MAX_NODES,
   restoreNodeBackup,
+  recordNodeActivity,
 } from "../lib/node-vault";
 import type { NodeSession } from "../lib/node-vault";
 import { getNodeBalances } from "../lib/node-balances";
 import type { NodeBalanceSnapshot } from "../lib/node-balances";
-import KrakenFunding from "./KrakenFunding";
 import NodeBridge from "./NodeBridge";
 import styles from "./NodeManager.module.css";
 
@@ -67,6 +67,7 @@ export default function NodeManager({ onSessionChange }: NodeManagerProps) {
   const selectedNodeRef = useRef<HTMLSelectElement | null>(null);
   const sessionRef = useRef<NodeSession | null>(null);
   const targetRef = useRef(targetEth);
+  const lastActivity = useRef(Date.now());
   const vaultGeneration = useRef(0);
   const balanceGeneration = useRef(0);
 
@@ -79,6 +80,28 @@ export default function NodeManager({ onSessionChange }: NodeManagerProps) {
     balanceGeneration.current += 1;
     if (sessionRef.current) forgetNodeSession(sessionRef.current);
   }, []);
+
+  function lockWallets() {
+    vaultGeneration.current += 1;
+    balanceGeneration.current += 1;
+    const current=sessionRef.current;
+    sessionRef.current=null;
+    if(current)forgetNodeSession(current);
+    setSession(null);onSessionChange?.(null);setBalances(null);setVaultAction("idle");
+    setVaultError("Wallets locked. Restore your encrypted backup to unlock them. Submitted transaction records remain available.");
+  }
+  useEffect(() => {
+    if(!session)return;
+    lastActivity.current=Date.now();
+    const idleMs=15*60*1000;
+    const check=()=>{if(Date.now()-lastActivity.current>=idleMs)lockWallets();};
+    const activity=(event:Event)=>{if(!event.isTrusted)return;check();if(sessionRef.current){try{recordNodeActivity(sessionRef.current);lastActivity.current=Date.now();}catch{lockWallets();}}};
+    const pagehide=()=>lockWallets();
+    document.addEventListener("pointerdown",activity);document.addEventListener("keydown",activity);
+    document.addEventListener("visibilitychange",check);window.addEventListener("pagehide",pagehide);
+    const timer=window.setInterval(check,1000);
+    return ()=>{window.clearInterval(timer);document.removeEventListener("pointerdown",activity);document.removeEventListener("keydown",activity);document.removeEventListener("visibilitychange",check);window.removeEventListener("pagehide",pagehide);};
+  },[session]);
 
   const verified = Boolean(session && isVerifiedNodeSession(session));
 
@@ -318,13 +341,14 @@ export default function NodeManager({ onSessionChange }: NodeManagerProps) {
   return (
     <section className={styles.manager} aria-labelledby="node-manager-title">
       <button className={styles.managerToggle} type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-controls="node-manager-panel">
-        <span><span className={styles.eyebrow}>Node wallets</span><strong id="node-manager-title">Prepare controlled funding wallets</strong><small>Encrypted local backup · individual Kraken withdrawals · PONS balance checks</small></span>
+        <span><span className={styles.eyebrow}>Node wallets</span><strong id="node-manager-title">Prepare controlled funding wallets</strong><small>Encrypted local backup · manual funding · PONS balance checks</small></span>
         <span className={open ? styles.chevronOpen : styles.chevron} aria-hidden="true">⌄</span>
       </button>
 
+      {session && <button className={styles.secondaryButton} type="button" onClick={lockWallets}>Lock wallets</button>}
       {open && <div id="node-manager-panel" className={styles.panel}>
         <div className={styles.step}>
-          <div className={styles.stepHeading}><span>1</span><div><h2>Create and verify wallets</h2><p>Keys stay in this tab. Download the encrypted backup, then restore it to prove you can recover the wallets.</p></div></div>
+          <div className={styles.stepHeading}><span>1</span><div><h2>Create and verify wallets</h2><p>Keys stay in this tab, which remains a sensitive signing environment. Wallets lock after 15 minutes without activity. Download the encrypted backup, then restore it to prove you can recover the wallets.</p></div></div>
           {vaultError && <div className={styles.alert} role="alert"><span>{vaultError}</span><button type="button" onClick={() => setVaultError("")}>Dismiss</button></div>}
           <div className={styles.controls}>
             <label><span>Wallet count</span><input type="number" min="1" max={MAX_NODES} value={count} onChange={(event) => setCount(Math.max(1, Math.min(MAX_NODES, Number(event.target.value) || 1)))} disabled={busy} /></label>
@@ -347,9 +371,9 @@ export default function NodeManager({ onSessionChange }: NodeManagerProps) {
         </div>
 
         <div className={`${styles.step} ${!verified ? styles.locked : ""}`} aria-disabled={!verified}>
-          <div className={styles.stepHeading}><span>2</span><div><h2>Fund and monitor wallets</h2><p>Review every exchange withdrawal individually, then check Robinhood Chain balances after bridging.</p></div></div>
+          <div className={styles.stepHeading}><span>2</span><div><h2>Fund and monitor wallets</h2><p>Send ETH to these wallets using your own wallet or exchange, then bridge Ethereum ETH to Robinhood Chain.</p></div></div>
           {!verified ? <p className={styles.lockMessage}>Verify the encrypted backup in step 1 to reveal funding destinations.</p> : session && <>
-            <KrakenFunding addresses={session.addresses} renderNodeActions={(_address, index) => <NodeBridge key={`${session.id}-${index}`} session={session} nodeIndex={index} />} />
+            {session.addresses.map((address,index)=><div key={`${session.id}-${index}`}><strong>Node {index+1}</strong><code className={styles.fullAddress}>{address}</code><NodeBridge session={session} nodeIndex={index} /></div>)}
             <div className={styles.chainHeading}><strong>Robinhood Chain funding target</strong><small>This is separate from the Ethereum withdrawal amount above. Check here only after each wallet has bridged to chain ID 4663.</small></div>
             <div className={styles.fundingControls}>
               <label><span>Target per wallet (ETH)</span><input value={targetEth} maxLength={80} onChange={(event) => updateTarget(event.target.value)} inputMode="decimal" aria-invalid={!targetWei} /></label>

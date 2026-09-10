@@ -17,7 +17,8 @@ export interface NodeSession {
 
 // This module never exposes a signer or secret. Forgetting removes access, but
 // JavaScript cannot guarantee that garbage-collected secret strings are erased.
-const sessions = new WeakMap<NodeSession, { root: Wallet }>();
+export const NODE_IDLE_MS = 15 * 60 * 1000;
+const sessions = new WeakMap<NodeSession, { root: Wallet; expiresAt: number }>();
 let kdfInProgress = false;
 
 function validatePassword(password: string): void {
@@ -34,7 +35,8 @@ function validateCount(count: number): void {
 
 function requireSession(session: NodeSession): { root: Wallet } {
   const state = sessions.get(session);
-  if (!state) throw new Error('This node session is no longer available. Restore its backup.');
+  if (state && Date.now() >= state.expiresAt) sessions.delete(session);
+  if (!state || Date.now() >= state.expiresAt) throw new Error('This node session is no longer available. Restore its backup.');
   return state;
 }
 
@@ -65,7 +67,7 @@ function register(root: Wallet, addresses: readonly string[], backupVerified: bo
     addresses: Object.freeze([...addresses]),
     backupVerified,
   });
-  sessions.set(session, { root });
+  sessions.set(session, { root, expiresAt: Date.now() + NODE_IDLE_MS });
   return session;
 }
 
@@ -222,12 +224,17 @@ export async function exportNodeKeystore(
   });
 }
 
+export function recordNodeActivity(session: NodeSession): void {
+  requireSession(session);
+  sessions.get(session)!.expiresAt = Date.now() + NODE_IDLE_MS;
+}
+
 export function forgetNodeSession(session: NodeSession): void {
   sessions.delete(session);
 }
 
 export function isVerifiedNodeSession(session: NodeSession): boolean {
-  return sessions.has(session) && session.backupVerified === true;
+  try { requireSession(session); return session.backupVerified === true; } catch { return false; }
 }
 
 function requireBridgeNode(session: NodeSession, index: number): { root: Wallet } {
@@ -245,17 +252,20 @@ export async function prepareNodeBridge(session: NodeSession, index: number, amo
   return prepareRelayBridge(session, index, session.addresses[index], amountEth, () => { requireBridgeNode(session, index); });
 }
 
-export async function executeNodeBridge(session: NodeSession, review: NodeBridgeReview): Promise<NodeBridgeOperation> {
+export async function executeNodeBridge(session: NodeSession, review: NodeBridgeReview, assertCurrent: () => void = () => {}): Promise<NodeBridgeOperation> {
+  assertCurrent();
   requireBridgeNode(session, review.nodeIndex);
   if (session.addresses[review.nodeIndex] !== review.nodeAddress) throw new Error('This bridge review belongs to another node.');
   const { executeRelayBridge } = await import('./relay-bridge');
   requireBridgeNode(session, review.nodeIndex);
-  return executeRelayBridge(session, review, () => { requireBridgeNode(session, review.nodeIndex); }, async (transaction) => {
+  return executeRelayBridge(session, review, () => { requireBridgeNode(session, review.nodeIndex); assertCurrent(); }, async (transaction) => {
+    assertCurrent();
     const state = requireBridgeNode(session, review.nodeIndex);
     const node = utils.HDNode.fromMnemonic(state.root.mnemonic.phrase).derivePath(`${ACCOUNT_PATH}/${review.nodeIndex}`);
     const wallet = new Wallet(node.privateKey);
     if (wallet.address !== review.nodeAddress) throw new Error('Node address mismatch.');
     const signed = await wallet.signTransaction(transaction);
+    assertCurrent();
     requireBridgeNode(session, review.nodeIndex);
     return signed;
   });

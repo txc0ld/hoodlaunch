@@ -84,3 +84,10 @@
   .walletRow em { justify-self: start; }
 }
 @media (prefers-reduced-motion: reduce) { .chevron, .chevronOpen, .progress > span { transition: none; } }
+
+.fullAddress {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}

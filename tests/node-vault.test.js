@@ -220,3 +220,10 @@ test('fifty unique wallets roundtrip through the unchanged encrypted format', as
     await assert.rejects(vault.restoreNodeBackup(JSON.stringify(data),password),/Unable to restore/);
   } finally {vault.forgetNodeSession(fifty);}
 });
+
+
+test('idle authority expires inside vault even when UI timers are suspended; activity cannot revive it',async()=>{
+ const now=Date.now;const started=now();let clock=started;Date.now=()=>clock;
+ let session;
+ try{session=vault.createNodeSession(1);clock=started+vault.NODE_IDLE_MS-1;vault.recordNodeActivity(session);clock+=vault.NODE_IDLE_MS-1;await vault.encryptNodeBackup(session,password);clock+=2;assert.throws(()=>vault.recordNodeActivity(session),/no longer/);await assert.rejects(vault.encryptNodeBackup(session,password),/no longer/);assert.equal(vault.isVerifiedNodeSession(session),false);}finally{Date.now=now;if(session)vault.forgetNodeSession(session);}
+});

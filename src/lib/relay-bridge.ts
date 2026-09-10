@@ -1,4 +1,5 @@
 import { BigNumber, providers, utils } from 'ethers';
+import { RELAY_SOURCE_HASH, verifyRuntime } from './trusted-runtime';
 import { hashRelayOrder } from './relay-order';
 
 const ZERO = '0x0000000000000000000000000000000000000000';
@@ -26,7 +27,7 @@ export interface NodeBridgeReview {
 }
 export interface NodeBridgeOperation {
   readonly nodeAddress: string; readonly requestId: string; readonly sourceTxHash: string;
-  readonly status: 'pending' | 'source-confirmed' | 'complete' | 'refunded' | 'unknown';
+  readonly status: 'pending' | 'source-confirmed' | 'complete' | 'refunded' | 'failed' | 'unknown';
   readonly message: string; readonly createdAt: number; readonly destinationTxHash?: string;
 }
 type RecordData = { -readonly [K in keyof NodeBridgeOperation]: NodeBridgeOperation[K] } & {
@@ -126,7 +127,7 @@ function read(node: string): RecordData | null {
     if (raw.length > 4096) throw Error();
     const r = obj(JSON.parse(raw));
     if (r.version !== 1 || !same(r.nodeAddress,node) || !Number.isSafeInteger(r.nonce) || r.nonce < 0 ||
-        !Number.isSafeInteger(r.createdAt) || !['pending','source-confirmed','complete','refunded','unknown'].includes(r.status) ||
+        !Number.isSafeInteger(r.createdAt) || !['pending','source-confirmed','complete','refunded','failed','unknown'].includes(r.status) ||
         typeof r.message !== 'string' || r.message.length > 400) throw Error();
     hash(r.sourceTxHash); hash(r.requestId); hash(r.orderId);
     const deposit = uint(r.amountWei), minimum = uint(r.minimumOutputWei);
@@ -145,7 +146,7 @@ function publicOperation(r: RecordData): NodeBridgeOperation {
     createdAt:r.createdAt,...(r.destinationTxHash ? {destinationTxHash:r.destinationTxHash}:{})});
 }
 export function getNodeBridgeOperation(node: string): NodeBridgeOperation | null {const r=read(node);return r ? publicOperation(r):null;}
-function available(node: string): void {const old=read(node);if(old && old.status!=='complete')throw new Error('This node has an unresolved bridge. Check its status; do not send another deposit.');}
+function available(node: string): void {const old=read(node);if(old && old.status!=='complete' && old.status!=='failed')throw new Error('This node has an unresolved bridge. Check its status; do not send another deposit.');}
 
 // Internal orchestration API. The vault owns authentication; no signer or secret is returned.
 export async function prepareRelayBridge(owner: object,index: number,node: string,input: string,assertActive:()=>void): Promise<NodeBridgeReview> {
@@ -157,7 +158,7 @@ export async function prepareRelayBridge(owner: object,index: number,node: strin
   const route = validateRelayQuote(quote,node,amountWei.toString());
   const p=provider(), dest=provider(true);
   try {
-    await Promise.all([chain(p,1),chain(dest,4663)]);
+    await Promise.all([chain(p,1),chain(dest,4663),verifyRuntime(p,RELAY_DEPOSITORY,RELAY_SOURCE_HASH)]);
     const tx = {from:node,to:RELAY_DEPOSITORY,data:route.data,value:amountWei};
     const [balance,estimate,fees,nonce,latestNonce] = await Promise.all([p.getBalance(node,'pending'),p.estimateGas(tx),p.getFeeData(),p.getTransactionCount(node,'pending'),p.getTransactionCount(node,'latest')]);
     if(nonce!==latestNonce)throw new Error('This node already has a pending Ethereum transaction. Wait for it to confirm.');
@@ -190,7 +191,7 @@ export async function executeRelayBridge(owner: object,review:NodeBridgeReview,a
     if(cap.used || Date.now()>=review.expiresAt)throw new Error('The bridge review expired. Get a fresh quote.');
     const p=provider();
     try {
-      await chain(p,1);
+      await Promise.all([chain(p,1),verifyRuntime(p,RELAY_DEPOSITORY,RELAY_SOURCE_HASH)]);
       const [balance,nonce,latest,estimate,fees] = await Promise.all([p.getBalance(review.nodeAddress,'pending'),p.getTransactionCount(review.nodeAddress,'pending'),
         p.getTransactionCount(review.nodeAddress,'latest'),p.estimateGas({...cap.tx,from:review.nodeAddress}),p.getFeeData()]);
       if(balance.lt(review.maxTotalWei) || nonce!==cap.tx.nonce || latest!==nonce || estimate.gt(review.gasLimit) ||
@@ -226,9 +227,22 @@ export async function refreshNodeBridgeOperation(node:string):Promise<NodeBridge
       const [receipt,tx]=await Promise.all([p.getTransactionReceipt(r.sourceTxHash),p.getTransaction(r.sourceTxHash)]);
       if(!receipt || !tx) {r.status='unknown';r.message='Ethereum has not confirmed this deposit. Do not send another deposit.';}
       else {
-        if(receipt.transactionHash.toLowerCase()!==r.sourceTxHash || !same(receipt.from,node) || !same(receipt.to,RELAY_DEPOSITORY) || receipt.status!==1 || receipt.confirmations<2 ||
+        if(receipt.transactionHash.toLowerCase()!==r.sourceTxHash || !same(receipt.from,node) || !same(receipt.to,RELAY_DEPOSITORY) || ![0,1].includes(receipt.status!) || receipt.confirmations<2 ||
           tx.hash.toLowerCase()!==r.sourceTxHash || tx.chainId!==1 || !same(tx.from,node) || !same(tx.to,RELAY_DEPOSITORY) || tx.nonce!==r.nonce || !tx.value.eq(r.amountWei) ||
           tx.data.toLowerCase()!==ABI.encodeFunctionData('depositNative',[node,r.orderId]).toLowerCase())throw Error();
+        if(!Number.isSafeInteger(receipt.blockNumber) || receipt.blockNumber<0 || !/^0x[0-9a-fA-F]{64}$/.test(receipt.blockHash))throw Error();
+        const canonical=await p.getBlock(receipt.blockNumber);
+        const head=await p.getBlockNumber();
+        if(!canonical || canonical.hash!==receipt.blockHash || !Number.isSafeInteger(head) || head<receipt.blockNumber+1)throw Error();
+        await verifyRuntime(p,RELAY_DEPOSITORY,RELAY_SOURCE_HASH,receipt.blockNumber);
+        if(receipt.status===0){
+          // The exact deposit failed onchain. No deposit occurred; gas was spent.
+          // Never infer this from Relay status or an error-attached receipt.
+          r.status='failed';r.message='Ethereum deposit reverted. Gas was spent, but no bridge deposit occurred. You may request a fresh quote.';
+          const finalBlock=await p.getBlock(receipt.blockNumber);
+          if(!finalBlock || finalBlock.hash!==receipt.blockHash)throw Error();
+          await chain(p,1);save(r);return publicOperation(r);
+        }
         const deposit=receipt.logs.some(log=>{try {if(!same(log.address,RELAY_DEPOSITORY))return false;const event=ABI.parseLog(log);
           return event.name==='RelayNativeDeposit' && same(event.args.from,node) && event.args.amount.eq(r.amountWei) && event.args.id.toLowerCase()===r.orderId;}catch{return false;}});
         if(!deposit)throw Error();

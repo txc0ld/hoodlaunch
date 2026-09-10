@@ -36,6 +36,7 @@ function gwei(wei: string) {
 }
 
 function statusLabel(status: NodeBridgeOperation["status"]) {
+  if (status === "failed") return "Ethereum deposit reverted";
   if (status === "pending") return "Ethereum broadcast pending";
   if (status === "source-confirmed") return "Ethereum confirmed · Robinhood pending";
   if (status === "complete") return "Destination confirmed on Robinhood Chain";
@@ -100,7 +101,7 @@ export default function NodeBridge({ session, nodeIndex }: NodeBridgeProps) {
   }, [review]);
 
   const expired = Boolean(review && now >= review.expiresAt);
-  const operationBlocksNewBridge = Boolean(operation && operation.status !== "complete");
+  const operationBlocksNewBridge = Boolean(operation && !(["complete", "failed"].includes(operation.status)));
   const amountValid = /^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/.test(amountEth) && (() => {
     try { return utils.parseEther(amountEth).gt(0); } catch { return false; }
   })();
@@ -152,7 +153,9 @@ export default function NodeBridge({ session, nodeIndex }: NodeBridgeProps) {
     setConfirmed(false);
     setError("");
     try {
-      const next = await executeNodeBridge(session, submittedReview);
+      const next = await executeNodeBridge(session, submittedReview, () => {
+        if (generation !== generationRef.current) throw new Error("Bridge view changed. No remaining submission is authorized.");
+      });
       if (generation !== generationRef.current) return;
       setOperation(next);
       setReview(null);
@@ -230,7 +233,7 @@ export default function NodeBridge({ session, nodeIndex }: NodeBridgeProps) {
         <dl><div><dt>Relay request</dt><dd>{operation.requestId}</dd></div><div><dt>Ethereum transaction</dt><dd>{operation.sourceTxHash}</dd></div>{operation.destinationTxHash && <div><dt>Robinhood transaction</dt><dd>{operation.destinationTxHash}</dd></div>}</dl>
         <button className={styles.secondaryButton} type="button" onClick={handleRefresh} disabled={action !== "idle"}>{action === "refreshing" ? "Checking Relay and both chains…" : "Refresh bridge status"}</button>
         {operation.status === "complete" && <small>Destination receipt and same-block balance increase were confirmed. You may prepare another bridge for this node.</small>}
-        {operation.status !== "complete" && <small>This node cannot start another bridge while this record is unresolved.</small>}
+        {!(["complete", "failed"].includes(operation.status)) && <small>This node cannot start another bridge while this record is unresolved.</small>}
       </div>}
     </div>
   );
