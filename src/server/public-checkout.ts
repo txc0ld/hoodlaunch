@@ -24,9 +24,13 @@ function hostedUrl(value: unknown, host: string): string {
   if (url.protocol !== 'https:' || url.hostname !== host || url.username || url.password || url.port) reconcile();
   return value;
 }
-export async function billingPortal(stripe: Stripe, customer: string, appOrigin: string): Promise<string> {
+function portalConfiguration(): string {
   const configuration = process.env.STRIPE_PORTAL_CONFIGURATION_ID;
   if (!configuration || !/^bpc_[A-Za-z0-9]+$/.test(configuration)) fail(503, 'BILLING_SETUP', 'Billing portal configuration is unavailable.');
+  return configuration;
+}
+export async function billingPortal(stripe: Stripe, customer: string, appOrigin: string): Promise<string> {
+  const configuration = portalConfiguration();
   const portal = await stripe.billingPortal.sessions.create({ customer, return_url: appOrigin + '/', configuration });
   return hostedUrl(portal.url, 'billing.stripe.com');
 }
@@ -36,6 +40,7 @@ function validateSession(session: Stripe.Checkout.Session, r: Reservation): void
       !lines || lines.has_more || lines.data.length !== 1 || lines.data[0].quantity !== 1 || lines.data[0].price?.id !== r.request.line_items![0].price || !['open', 'complete', 'expired'].includes(session.status || '')) reconcile();
 }
 export async function subscriptionCheckout(db: Db, stripe: Stripe, user: string, customer: string, price: string, appOrigin: string, now: () => number = Date.now): Promise<string> {
+  portalConfiguration(); // A payable checkout must have a configured subscription-management path.
   if (!/^price_[A-Za-z0-9]+$/.test(price) || !/^cus_[A-Za-z0-9]+$/.test(customer)) reconcile();
   const request: Stripe.Checkout.SessionCreateParams = { mode: 'subscription', customer, client_reference_id: user, line_items: [{ price, quantity: 1 }], subscription_data: { metadata: { hood_user_id: user } }, success_url: appOrigin + '/?billing=return', cancel_url: appOrigin + '/?billing=cancelled', allow_promotion_codes: false };
   async function reserve(previous?: Reservation) {

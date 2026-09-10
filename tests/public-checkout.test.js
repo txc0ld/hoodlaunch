@@ -82,3 +82,11 @@ test('exact 31-minute remaining boundary can retry, one millisecond below it can
  const below=await harness(t);below.controls.failBefore=true;await assert.rejects(below.run());
  const other=(await below.db.query('select * from hood_billing')).rows[0];below.advance(Number(other.checkout_expires_at)*1000-below.now()-31*60000+1);await assert.rejects(below.run(),/reconciliation/);assert.equal(below.sessions.size,0);assert.equal(creates(below).length,1);
 });
+test('missing or malformed portal configuration blocks checkout before reservation or Stripe creation',async t=>{
+ const h=await harness(t);
+ for(const value of [undefined,'bpc_','https://evil.test','bpc_bad-config']){
+   if(value===undefined)delete process.env.STRIPE_PORTAL_CONFIGURATION_ID;else process.env.STRIPE_PORTAL_CONFIGURATION_ID=value;
+   await assert.rejects(h.run(),/configuration/);assert.equal(h.calls.length,0);
+   assert.equal((await h.db.query('select checkout_key from hood_billing')).rows[0].checkout_key,null);
+ }
+});
