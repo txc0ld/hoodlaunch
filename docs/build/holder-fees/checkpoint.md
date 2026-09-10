@@ -9,7 +9,7 @@ Checks observed on Node `v24.21.0`:
 | Check | Result | Evidence |
 | --- | --- | --- |
 | Initial focused tests | PASS 62/62, exit 0 | `../verification/holder-fees/checks/focused.log` |
-| Final holder + launch regression tests | PASS 118/118, exit 0 | `../verification/holder-fees/checks/holder-and-launch.log` |
+| Final holder + launch regression tests | PASS 119/119, exit 0 | `../verification/holder-fees/checks/holder-and-launch.log` |
 | TypeScript | PASS, exit 0 | `../verification/holder-fees/checks/typecheck.log` |
 | `git diff --check` | PASS, exit 0 | Local command observed |
 | Integrated full suite/build/browser | NOT_RUN by this writer | Parent integration owner |

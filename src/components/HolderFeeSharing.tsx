@@ -36,6 +36,6 @@ export default function HolderFeeSharing({ receipt, wallet, requested }: { recei
       <code>Recipient: {observation.recipient}</code>{observation.distributor && <code>Distributor: {observation.distributor}</code>}
     </>}</div>
     {error && <p role="alert">{error}</p>}
-    <a href={HOLDER_PROFILE_URL} target="_blank" rel="noopener noreferrer">View holder claims on your PONS profile →</a>
+    <a href={HOLDER_PROFILE_URL} target="_blank" rel="noopener noreferrer">View claimable fees on PONS</a>
   </section>;
 }

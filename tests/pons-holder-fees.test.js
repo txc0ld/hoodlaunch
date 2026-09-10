@@ -122,3 +122,9 @@ test('timed-out lookup releases latch and late reads cannot report success', asy
   await assert.rejects(h.inspect(), /timed out/); assert(h.state.removed);
   h.state.timeout = false; h.state.hook = undefined; assert.equal((await h.inspect()).status, 'not-created');
 });
+
+test('holder status links to the exact official claimable fees destination without invented balances', () => {
+  const h = harness(); assert.equal(h.core.HOLDER_PROFILE_URL, 'https://www.ponsfamily.com/profile');
+  const ui = fs.readFileSync('src/components/HolderFeeSharing.tsx', 'utf8');
+  assert.match(ui, /href=\{HOLDER_PROFILE_URL\} target="_blank" rel="noopener noreferrer">View claimable fees on PONS<\/a>/);
+});
