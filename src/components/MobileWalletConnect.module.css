@@ -1,0 +1,33 @@
+.dialog {
+  width: min(520px, calc(100% - 28px));
+  max-height: calc(100dvh - 28px);
+  overflow: auto;
+  padding: 30px;
+  border: 2px solid #ccff00;
+  background: #11140e;
+  color: #f1f2ea;
+  box-shadow: 9px 9px 0 #ccff00;
+}
+
+.dialog::backdrop { background: rgba(0, 0, 0, .82); }
+.dialog h2 { margin: 4px 44px 12px 0; font: 400 38px/1 "Anton", "Arial Narrow", sans-serif; text-transform: uppercase; }
+.dialog p { color: #b9c0b3; line-height: 1.55; }
+.eyebrow { margin: 0; color: #ccff00 !important; font: 700 11px/1 "Space Grotesk", sans-serif; letter-spacing: .14em; }
+.close { position: absolute; top: 14px; right: 14px; min-width: 44px; min-height: 44px; border: 1px solid #626759; background: #1a1d1a; color: #f1f2ea; font-size: 25px; cursor: pointer; }
+.primary, .manual button, .actions button { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; border: 2px solid #626759; background: #1a1d1a; color: #f1f2ea; font: 700 13px/1.2 "Space Grotesk", sans-serif; cursor: pointer; text-align: center; }
+.primary { width: 100%; min-height: 52px; margin: 10px 0 18px; border-color: #ccff00; background: #ccff00; color: #0a0a0a; text-decoration: none; box-shadow: 4px 4px 0 #f2f3eb; }
+.manual { padding: 16px; border: 1px solid #454b40; background: #0c0e0b; }
+.manual p { margin: 0 0 10px; }
+.manual code { display: block; margin-bottom: 12px; color: #e9f1df; overflow-wrap: anywhere; user-select: all; }
+.manual button { width: 100%; }
+.note { font-size: 13px; }
+.error { color: #ffad96 !important; }
+.status { color: #ccff00 !important; }
+.actions { display: grid; grid-template-columns: 1.4fr 1fr; gap: 10px; margin-top: 18px; }
+.dialog :focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+
+@media (max-width: 420px) {
+  .dialog { width: calc(100% - 20px); padding: 24px 18px; box-shadow: 5px 5px 0 #ccff00; }
+  .dialog h2 { font-size: 32px; }
+  .actions { grid-template-columns: 1fr; }
+}
