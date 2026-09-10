@@ -1,3 +1,4 @@
+import { billingPortal, subscriptionCheckout } from '../../src/server/public-checkout';
 import { account, accountConfigured, authClient, billingConfigured, customerFor, database, hasPro, stripeClient, takeQuota } from '../../src/server/public-services';
 import { digest, fail, jsonBody, origin, readToken, safeHandler, sessionCookie, sessionToken, writeGuard } from '../../src/server/public-security';
 
@@ -46,14 +47,9 @@ export default safeHandler(async (req, res) => {
     const customer = await customerFor(id, action === 'checkout');
     if (!customer) fail(400, 'NO_BILLING', 'No subscription account exists yet.');
     if (action === 'portal' || await hasPro(id)) {
-      const portal = await stripe.billingPortal.sessions.create({ customer, return_url: origin() + '/' });
-      res.json({ url: portal.url }); return;
+      res.json({ url: await billingPortal(stripe, customer, origin()) }); return;
     }
-    const { data: key, error } = await database().rpc('hood_checkout_key', { p_user: id });
-    if (error || !key) fail(503, 'BILLING_UNAVAILABLE', 'Unable to prepare checkout.');
-    const session = await stripe.checkout.sessions.create({ mode: 'subscription', customer, client_reference_id: id, line_items: [{ price: process.env.STRIPE_PRO_PRICE_ID!, quantity: 1 }], subscription_data: { metadata: { hood_user_id: id } }, success_url: origin() + '/?billing=return', cancel_url: origin() + '/?billing=cancelled', allow_promotion_codes: false }, { idempotencyKey: `hood-checkout-${key}` });
-    if (!session.url) fail(409, 'CHECKOUT_EXPIRED', 'This checkout has finished. Refresh your account status or try again tomorrow.');
-    res.json({ url: session.url }); return;
+    res.json({ url: await subscriptionCheckout(database(), stripe, id, customer, process.env.STRIPE_PRO_PRICE_ID!, origin()) }); return;
   }
   fail(400, 'ACTION', 'Unknown account action.');
 });

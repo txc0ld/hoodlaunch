@@ -39,19 +39,46 @@ grant all on public.hood_sessions, public.hood_billing, public.hood_quota to ser
 -- Schedule daily in Supabase (not request paths):
 -- delete from public.hood_sessions where expires_at < now();
 -- delete from public.hood_quota where expires_at < now() - interval '1 day';
--- Serialize checkout creation so parallel clicks cannot open two paid subscriptions.
-alter table public.hood_billing add column checkout_key uuid, add column checkout_started timestamptz;
-create function public.hood_checkout_key(p_user uuid) returns uuid
-language plpgsql security definer set search_path = '' as $$
-declare k uuid;
+-- One durable checkout intent per account. Time alone never rotates an uncertain request.
+-- Full Stripe request parameters remain immutable for each idempotency key.
+alter table public.hood_billing add column checkout_key uuid, add column checkout_started timestamptz,
+ add column checkout_expires_at bigint, add column checkout_request jsonb,
+ add column checkout_session_id text check (checkout_session_id ~ '^cs_[A-Za-z0-9_]+$');
+create function public.hood_checkout_reserve(p_user uuid, p_request jsonb, p_expected_key uuid default null, p_expired_session text default null)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare b public.hood_billing; expiry bigint;
 begin
- perform 1 from public.hood_billing where user_id = p_user for update;
- update public.hood_billing set checkout_key = gen_random_uuid(), checkout_started = now()
- where user_id = p_user and (checkout_key is null or checkout_started < now() - interval '25 hours');
- select checkout_key into k from public.hood_billing where user_id = p_user;
- return k;
+ select * into b from public.hood_billing where user_id=p_user for update;
+ if not found then raise exception 'billing account missing'; end if;
+ if p_request is null or jsonb_typeof(p_request) <> 'object' or p_request ? 'expires_at' or
+    p_request->>'customer' is distinct from b.customer_id or p_request->>'mode' is distinct from 'subscription' or
+    p_request->>'client_reference_id' is distinct from p_user::text then raise exception 'invalid checkout request'; end if;
+ if b.checkout_key is not null then
+   if b.checkout_request - 'expires_at' is distinct from p_request then raise exception 'checkout configuration changed; reconcile existing intent'; end if;
+   -- Only a server-verified expired Stripe session can authorize this compare-and-swap.
+   -- A concurrent winner is returned unchanged; unknown/sessionless reservations never rotate.
+   if p_expected_key is null or b.checkout_key <> p_expected_key or b.checkout_session_id is null or
+      p_expired_session is null or b.checkout_session_id <> p_expired_session then
+     return jsonb_build_object('key',b.checkout_key,'expires_at',b.checkout_expires_at,'request',b.checkout_request,'session_id',b.checkout_session_id);
+   end if;
+ end if;
+ expiry := floor(extract(epoch from now()))::bigint + 23*60*60;
+ update public.hood_billing set checkout_key=gen_random_uuid(),checkout_started=now(),checkout_expires_at=expiry,
+   checkout_request=p_request || jsonb_build_object('expires_at',expiry),checkout_session_id=null
+   where user_id=p_user returning * into b;
+ return jsonb_build_object('key',b.checkout_key,'expires_at',b.checkout_expires_at,'request',b.checkout_request,'session_id',b.checkout_session_id);
 end $$;
-revoke all on function public.hood_checkout_key(uuid) from public,anon,authenticated;
-grant execute on function public.hood_checkout_key(uuid) to service_role;
+create function public.hood_checkout_bind(p_user uuid,p_key uuid,p_session text) returns boolean
+language plpgsql security definer set search_path = '' as $$
+declare changed integer;
+begin
+ if p_session is null or p_session !~ '^cs_[A-Za-z0-9_]+$' then raise exception 'invalid checkout session'; end if;
+ update public.hood_billing set checkout_session_id=p_session
+ where user_id=p_user and checkout_key=p_key and (checkout_session_id is null or checkout_session_id=p_session);
+ get diagnostics changed = row_count;
+ return changed=1;
+end $$;
+revoke all on function public.hood_checkout_reserve(uuid,jsonb,uuid,text), public.hood_checkout_bind(uuid,uuid,text) from public,anon,authenticated;
+grant execute on function public.hood_checkout_reserve(uuid,jsonb,uuid,text), public.hood_checkout_bind(uuid,uuid,text) to service_role;
 
 commit;
