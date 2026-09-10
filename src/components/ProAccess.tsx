@@ -13,6 +13,7 @@ export default function ProAccess({ onAccessChange, onSessionIdentityChange, sal
   const [sent, setSent] = useState(false); const [busy, setBusy] = useState(false); const [message, setMessage] = useState('Checking account services…');
   const [unresolvedAuth,setUnresolvedAuth] = useState(false);
   const authIntent=useRef<string|null>(null);
+  const [activeAuthId,setActiveAuthId]=useState<string|null>(null);
   const generation = useRef(0);
   const accountMutation = useRef(false);
   const walletGeneration = useRef(0); const mounted = useRef(true); const walletBusy = useRef(false);
@@ -65,7 +66,7 @@ export default function ProAccess({ onAccessChange, onSessionIdentityChange, sal
   async function retryCancellation() {
     accountMutation.current=true; walletGeneration.current++; generation.current++;
     onSessionIdentityChange?.(null); onAccessChange(false); setAccess(NONE); setBusy(true);
-    try { if(authIntent.current)await cancelClientAuth(request,authIntent.current);else await cancelPendingAuth(request); if(pendingAuthIds().length)throw new Error('Another sign-in remains unresolved.'); if(!mounted.current)return; authIntent.current=null; setUnresolvedAuth(false); accountMutation.current=false; await refresh();setMessage('Sign-in canceled. Dismiss any open wallet prompt.'); }
+    try { if(authIntent.current)await cancelClientAuth(request,authIntent.current);else await cancelPendingAuth(request); if(pendingAuthIds().length)throw new Error('Another sign-in remains unresolved.'); if(!mounted.current)return; authIntent.current=null; setActiveAuthId(null); setUnresolvedAuth(false); accountMutation.current=false; await refresh();setMessage('Sign-in canceled. Dismiss any open wallet prompt.'); }
     catch { if(mounted.current) { setUnresolvedAuth(true); setMessage('Cancellation is still unconfirmed. Retry when your connection is available.'); } }
     finally { if(mounted.current)setBusy(false); }
   }
@@ -77,9 +78,9 @@ export default function ProAccess({ onAccessChange, onSessionIdentityChange, sal
     const sequence=++walletGeneration.current,version=getWalletVersion();
     const current=()=>{if(!mounted.current||sequence!==walletGeneration.current||version!==getWalletVersion()||getWalletProvider()!==wallet)throw new Error('Wallet sign-in changed or was closed.');};
     setMessage('Approve the sign-in message. No gas payment or token approval is requested.');
-    try { await signInWithWallet(wallet,window.location.origin,request,current,id=>{authIntent.current=id;setUnresolvedAuth(false);}); accountMutation.current=false;setUnresolvedAuth(false);await refresh(); }
+    try { await signInWithWallet(wallet,window.location.origin,request,current,id=>{authIntent.current=id;setActiveAuthId(id);setUnresolvedAuth(false);}); accountMutation.current=false;setUnresolvedAuth(false);await refresh(); }
     catch(error){if(mounted.current){try{if(!pendingAuthIds().length){accountMutation.current=false;await refresh();}}catch{}setMessage(error instanceof Error?error.message.slice(0,240):'Wallet sign-in failed.');}}
-    finally { walletBusy.current=false;authIntent.current=null;try{accountMutation.current=pendingAuthIds().length>0;}catch{accountMutation.current=true;} if(mounted.current){setUnresolvedAuth(accountMutation.current);setBusy(false);} }
+    finally { walletBusy.current=false;authIntent.current=null;try{accountMutation.current=pendingAuthIds().length>0;}catch{accountMutation.current=true;} if(mounted.current){setActiveAuthId(null);setUnresolvedAuth(accountMutation.current);setBusy(false);} }
   }
   function holderBalance() {
     try { return access.holder?.balance === null || access.holder?.balance === undefined ? null : utils.formatUnits(access.holder.balance, HOODRICH_DECIMALS); } catch { return null; }
@@ -93,7 +94,7 @@ export default function ProAccess({ onAccessChange, onSessionIdentityChange, sal
     try {
       let result;
       if(action==='verify-code') {
-        attempt=startClientAuth();authIntent.current=attempt.requestId;
+        attempt=startClientAuth();authIntent.current=attempt.requestId;setActiveAuthId(attempt.requestId);
         const prepared=await request('auth-prepare');
         if(!mounted.current||accountSequence!==walletGeneration.current||prepared.prepared!==true)throw new Error('Sign-in was closed. Retry cancellation.');
         assertClientAuthCurrent(attempt.requestId);
@@ -101,7 +102,7 @@ export default function ProAccess({ onAccessChange, onSessionIdentityChange, sal
         if(!mounted.current||accountSequence!==walletGeneration.current)throw new Error('Sign-in was closed. Retry cancellation.');
         assertClientAuthCurrent(attempt.requestId);
         if(result.signedIn!==true)throw new Error('Account sign-in was not confirmed.');
-        completeClientAuth(attempt.requestId);authIntent.current=null;setUnresolvedAuth(false);
+        completeClientAuth(attempt.requestId);authIntent.current=null;setActiveAuthId(null);setUnresolvedAuth(false);
       } else result=await request(action, { email, code });
       setCode('');
       if (action === 'request-code') { setSent(true); setMessage('Check your email for a sign-in code.'); }
@@ -111,13 +112,13 @@ export default function ProAccess({ onAccessChange, onSessionIdentityChange, sal
         window.location.assign(url.href);
       } else { if (action === 'logout') { setEmail(''); setSent(false); } accountMutation.current = false; await refresh(); }
     } catch (error) { try { if(attempt)await cancelClientAuth(request,attempt.requestId); } catch { if(mounted.current)setUnresolvedAuth(true); } if(mounted.current){try{if(!pendingAuthIds().length){accountMutation.current=false;await refresh();}}catch{}setMessage(error instanceof Error ? error.message : 'Request failed.');} }
-    finally { authIntent.current=null; try{accountMutation.current=pendingAuthIds().length>0;}catch{accountMutation.current=true;} if (mounted.current) { setUnresolvedAuth(accountMutation.current); setBusy(false); } }
+    finally { authIntent.current=null; try{accountMutation.current=pendingAuthIds().length>0;}catch{accountMutation.current=true;} if (mounted.current) { setActiveAuthId(null); setUnresolvedAuth(accountMutation.current); setBusy(false); } }
   }
   return <section id="pro-account" className={styles.panel} aria-labelledby="pro-title">
     <div><p className={styles.label}>HOODLABS PRO · {PRO_PRICE_LABEL}</p><h2 id="pro-title">One launch. Up to 50 wallets.</h2><p>Token launching stays free. Free accounts can create one wallet every 24 hours when wallet creation is available. Pro adds bulk creation of up to 50 wallets and managed uploads. Subscribe for {PRO_PRICE_LABEL} or qualify by holding {HOODRICH_MINIMUM_FORMATTED} HOODRICH ($RICH).</p></div>
     {access.pro ? <p className={styles.active}>Pro active{access.holder?.granted ? ' · wallet grant' : access.holder?.eligible ? ' · HOODRICH holder' : ' · subscription'} · 50 upload attempts per day</p> : <p className={styles.note}>Your wallet keys stay in this browser. Account services never receive your seed phrase, backup password or exchange credentials. Network and protocol fees still apply.</p>}
     {unresolvedAuth && <div role="status"><p>A sign-in attempt needs cancellation before account tools can be used.</p><button disabled={busy} onClick={()=>void retryCancellation()}>Retry cancellation</button></div>}
-    {busy && authIntent.current && <button onClick={()=>void retryCancellation()}>Cancel sign-in</button>}
+    {busy && activeAuthId && <button onClick={()=>void retryCancellation()}>Cancel sign-in</button>}
     {access.configured && !access.signedIn && access.walletSignInAvailable === true && !unresolvedAuth && <div className={styles.controls}><button disabled={busy} onClick={()=>void walletSignIn()}>Sign in with wallet</button><p>A wallet account is separate from an email account. Use your original sign-in method for an existing subscription.</p></div>}
     {access.configured && !access.signedIn && access.walletSignInAvailable !== true && access.signInAvailable !== true && <p role="status">Email sign-in is temporarily unavailable. Free launch planning remains available.</p>}
     {access.configured && !access.signedIn && access.signInAvailable === true && !unresolvedAuth && <form onSubmit={event => { event.preventDefault(); void act(sent ? 'verify-code' : 'request-code'); }} className={styles.controls}>
