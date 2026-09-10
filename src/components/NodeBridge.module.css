@@ -36,3 +36,5 @@
   .controls, .details { grid-template-columns: 1fr; }
   .reviewHeading { align-items: flex-start; }
 }
+
+.controls input,.bridgeButton,.confirmButton,.secondaryButton,.alert,.review,.operation,.fullAddress,.details div,.operation dl div{border-radius:2px}.controls input{min-height:44px;background:#181b18}.bridgeButton,.confirmButton,.secondaryButton{min-height:44px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;text-transform:uppercase;letter-spacing:.04em}.confirmButton{background:#c7ff48}.bridgeButton{border-color:#6c8435;background:#20291a}.review,.operation{background:#151815}

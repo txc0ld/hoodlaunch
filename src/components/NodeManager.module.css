@@ -91,3 +91,7 @@
   overflow-wrap: anywhere;
   word-break: break-word;
 }
+
+.manager{width:min(1180px,calc(100% - 48px));border-color:#353b34;border-radius:3px;background:#121512;box-shadow:0 30px 80px rgba(0,0,0,.32)}
+.managerToggle{min-height:88px;padding:20px 28px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.managerToggle:hover{background:#171b17}.managerToggle small{color:#a0a79c}.panel,.step+.step{border-color:#343a33}.step{padding:30px 28px}.stepHeading>span{border-radius:50%;background:#c7ff48}.controls input,.restoreBox input,.fundingControls input,.keystoreBox input,.keystoreBox select{min-height:44px;border-radius:2px;background:#181b18}.primaryButton,.secondaryButton{min-height:44px;border-radius:2px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;text-transform:uppercase;letter-spacing:.05em}.primaryButton{background:#c7ff48}.restoreBox,.keystoreBox,.sessionStatus,.notice,.lockMessage,.walletRow{border-radius:2px}.walletRow{background:#181b18}
+@media(max-width:560px){.manager{width:calc(100% - 20px);border-radius:3px}}

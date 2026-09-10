@@ -77,3 +77,6 @@
 .customTrade input:focus-visible { outline: 2px solid #bdf641; outline-offset: 1px; }
 .customTrade input:disabled { opacity: .5; }
 .customTrade button { min-height: 38px; padding: 0 10px; }
+
+.trading{width:min(1180px,calc(100% - 48px));border-color:#353b34;border-radius:3px;background:#121512;box-shadow:0 30px 80px rgba(0,0,0,.32)}.header{padding:28px;border-color:#343a33}.header h2{font-size:30px;font-weight:520;letter-spacing:-.045em}.header p{color:#a0a79c}.body{padding:28px}.chainBadge,.locked,.empty,.tokenPicker input,.primaryButton,.secondaryButton,.confirmButton,.alert,.tokenSummary div,.phase,.bulkToolbar,.node,.metrics div,.tradeButtons button,.review,.fullAddress,.reviewDetails div,.operation,.operation dl div,.customTrade input{border-radius:2px}.tokenPicker input,.customTrade input{min-height:44px;background:#181b18}.primaryButton,.secondaryButton,.confirmButton,.tradeButtons button{min-height:44px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;text-transform:uppercase;letter-spacing:.04em}.primaryButton,.confirmButton{background:#c7ff48}.node{background:#151815}.metrics div,.reviewDetails div,.operation dl div{background:#191c19}.eyebrow{color:#c7ff48}
+@media(max-width:560px){.trading{width:calc(100% - 20px);border-radius:3px}.header,.body{padding:20px}}
