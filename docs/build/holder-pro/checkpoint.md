@@ -1,0 +1,9 @@
+# Current checkpoint
+
+Scope: add Pro access for at least500,000 HOODRICH in one verified standard wallet on Robinhood Chain4663, independently of an active paid subscription. Contract: contract.md. Base releaseda1372df; UI/shared interface8afb4a5, setup-reference correction728833c. R2 account/schema with R3 ownership-message boundary; critical server owner, independent verifier and fresh reviewer required. No custody/signing transaction changes or real transfers/approvals/customer charges.
+
+Official token `0x6d5dc12131b2ad8748C54aB1Ac1b1a2cC53c2118` identified by hoodrich.rip; public RPC chain4663 and18decimals confirmed. Inclusive raw threshold500000000000000000000000. Email account + fresh current-session wallet proof; one wallet/account and account/wallet. New002 migration only. All tests use inert identities and mocked providers or local SQL.
+
+Root UI/helper15/15 focused tests and TypeScript PASS. Server/SQL integration, combined suite/build, independent verification/review and protected deployment are in progress; final immutable evidence belongs in the private work/public-release/verification/holder-pro directory and outputs/HOODLABS-release-report.md. Do not infer final acceptance from this in-progress checkpoint.
+
+Standing authorization permits source publishing and protected non-signing deployment to txc0ld/hoodlaunch and tx-build/hoodlabs. Preserve original owner project/.env.local, original localhost3000 browser and existing root/www site. LIVE_LAUNCH_ENABLED remainsfalse, Vercel protection remainsenabled. Business Supabase and live/test provider validation remain unavailable; no claim of functional customer access yet. Stripe product/portal exist; monthly$6.90 currency still needs USD/AUD confirmation. Porkbun launchCNAME still needed. Financial release requires qualified human decision after operational checks; this holder change grants no release waiver. Agent usage/cost unknown.
