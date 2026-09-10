@@ -59,3 +59,7 @@ Complete the operational checks in [SECURITY.md](SECURITY.md): real test-mode si
 Set provider spending alerts and quotas, choose support/privacy/terms contacts, and document database backup and restore ownership. Keep the previous verified deployment available for rollback. If verification fails, keep signing and new subscriptions disabled and preserve transaction/checkout evidence; do not reset records to force retries.
 
 Key principle: publish the reviewed app independently, then enable paid financial tools only when the business services and recovery paths are verified together.
+
+### Free wallet generation allowance (staged)
+
+`NODE_GENERATION_ENABLED=false` keeps the new account allowance endpoint closed. Migration `db/004_node_generation.sql` adds service-only attempt/cooldown records; apply only after its independent migration checks pass. This backend alone does not enable public wallet generation. The separate vault recovery/session integration and account sign-in must be ready first. The Free allowance is one authorized attempt per account per rolling 24 hours; Pro may request up to 50 wallets per attempt. Do not remove the existing financial gates to expose generation.
