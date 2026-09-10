@@ -37,7 +37,7 @@ export default function ProAccess({ onAccessChange }: { onAccessChange: (value: 
     finally { setBusy(false); }
   }
   return <section className={styles.panel} aria-labelledby="pro-title">
-    <div><p className={styles.label}>HOODRICH PRO</p><h2 id="pro-title">One launch. Up to 50 wallets.</h2><p>Free token launching. Pro adds the guided wallet workspace and managed image uploads.</p></div>
+    <div><p className={styles.label}>HOODLAUNCH PRO</p><h2 id="pro-title">One launch. Up to 50 wallets.</h2><p>Free token launching. Pro adds the guided wallet workspace and managed image uploads.</p></div>
     {access.pro ? <p className={styles.active}>Pro active · 50 upload attempts per day</p> : <p className={styles.note}>Your wallet keys stay in this browser. Account services never receive your seed phrase, backup password or exchange credentials. Network and protocol fees still apply.</p>}
     {access.configured && !access.signedIn && <form onSubmit={event => { event.preventDefault(); void act(sent ? 'verify-code' : 'request-code'); }} className={styles.controls}>
       <label>Email<input type="email" autoComplete="email" value={email} onChange={event => { setEmail(event.target.value); setSent(false); }} required maxLength={254} disabled={busy} /></label>
