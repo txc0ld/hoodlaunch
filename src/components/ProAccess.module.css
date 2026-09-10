@@ -9,7 +9,7 @@
 .controls label { display:flex; flex-direction:column; gap:7px; color:#c5ced7; font-size:13px; }
 .controls input { min-width:220px; min-height:48px; padding:0 14px; border:1px solid #344252; border-radius:12px; background:#090c11; color:#f4f7fa; font:inherit; }
 .controls button { min-height:48px; padding:0 18px; border:1px solid #ccff66; border-radius:12px; background:#ccff66; color:#071018; cursor:pointer; font:inherit; font-weight:500; transition:background 180ms ease,border-color 180ms ease; }
-.controls button:hover:not(:disabled) { border-color:#dceefa; background:#dceefa; }
+.controls button:hover:not(:disabled) { border-color:#e0ff9c; background:#e0ff9c; }
 .controls button:disabled { opacity:.5; cursor:not-allowed; }
 .controls input:focus-visible,.controls button:focus-visible,.panel a:focus-visible { outline:2px solid #ccff66; outline-offset:3px; }
 .holder { margin-top:22px; padding-top:18px; border-top:1px solid #28313c; }

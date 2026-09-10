@@ -74,7 +74,7 @@
 .chevronOpen { transform:rotate(180deg); }
 .advancedFields { padding:4px 1px 10px; }
 .checkField { display:flex; gap:10px; align-items:flex-start; margin-bottom:18px; color:#e2e9ee; font-size:12px; }
-.checkField input { width:18px; height:18px; accent-color:#91c7e8; }
+.checkField input { width:18px; height:18px; accent-color:#ccff66; }
 .checkField span { display:grid; gap:3px; }
 .configDetails { display:grid; grid-template-columns:repeat(3,1fr); gap:1px; overflow:hidden; margin:-7px 0 17px; border:1px solid #28313c; border-radius:12px; background:#28313c; }
 .configDetails>div { min-width:0; display:grid; gap:5px; padding:12px; background:#12161d; }
@@ -85,7 +85,7 @@
 .feeLine strong { color:#d9e2e9; }
 .primaryButton,.secondaryButton { min-height:50px; display:flex; align-items:center; justify-content:center; gap:8px; padding:0 20px; border:1px solid #344252; border-radius:12px; font:inherit; font-weight:500; text-decoration:none; cursor:pointer; transition:background 180ms ease,border-color 180ms ease,transform 180ms ease; }
 .primaryButton { width:100%; border-color:#ccff66; background:#ccff66; color:#071018; }
-.primaryButton:hover:not(:disabled) { border-color:#dceefa; background:#dceefa; transform:translateY(-1px); }
+.primaryButton:hover:not(:disabled) { border-color:#e0ff9c; background:#e0ff9c; transform:translateY(-1px); }
 .primaryButton:disabled { color:#84909b; border-color:#303b47; background:#1d2731; cursor:not-allowed; }
 .secondaryButton { color:#edf3f7; background:#12161d; }
 .secondaryButton:hover:not(:disabled) { border-color:#52758d; background:#18202a; }
