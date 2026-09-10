@@ -6,7 +6,7 @@ The public app is a separate source release. Do not deploy the original local op
 | --- | --- |
 | GitHub | `txc0ld/hoodlaunch` |
 | Vercel team / project | `tx-build` / `hoodlabs` |
-| Public address | `https://launch.hoodrich.rip` |
+| Public address | `https://labs.hoodrich.rip` |
 | Existing website | Leave `www.hoodrich.rip` and Vercel `hood-rich` intact |
 | Stripe business account | Fantom Labs, `acct_1TFnGyBSWo9IPsgC` |
 | Stripe product | `prod_hoodlabs_pro`, HOODLABS Pro |
@@ -44,7 +44,7 @@ Test nonce replay, concurrent verification, expiry/logout/unlink races, cross-ac
 
 Use Node 24, run `npm ci`, `npm run typecheck`, `npm test`, `npm run build`, `node scripts/check-release.cjs`, and `npm audit --omit=dev --audit-level=moderate`. Bind review evidence to the exact Git revision that is deployed. Check the compiled site in a separate browser session; never reload an unlocked local wallet workspace as part of deployment testing.
 
-Git deployments are disabled in `vercel.json` until the repository/project mapping and release process are checked. Keep Vercel authentication protection enabled for preview releases. Add only `launch.hoodrich.rip` to the new project and follow Vercel's exact DNS instruction; leave the root and `www` records untouched. Verify the deployed TLS certificate, nonce Content Security Policy, cache controls, missing owner endpoints, account error handling and mobile guides.
+Git deployments are disabled in `vercel.json` until the repository/project mapping and release process are checked. Keep Vercel authentication protection enabled for preview releases. Add only `labs.hoodrich.rip` to the new project and follow Vercel's exact DNS instruction; leave the root and `www` records untouched. Verify the deployed TLS certificate, nonce Content Security Policy, cache controls, missing owner endpoints, account error handling and mobile guides.
 
 ## Before enabling sales or signing
 

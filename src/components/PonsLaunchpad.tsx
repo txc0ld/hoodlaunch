@@ -434,7 +434,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
   return (
     <main className={styles.page}>
       <nav className={styles.nav} aria-label="Primary navigation">
-        <a className={styles.brand} href="https://launch.hoodrich.rip" target="_blank" rel="noreferrer" aria-label="Open HOODLABS website"><span className={styles.brandMark}>H</span><span>HOODLABS</span></a>
+        <a className={styles.brand} href="https://labs.hoodrich.rip" target="_blank" rel="noreferrer" aria-label="Open HOODLABS website"><span className={styles.brandMark}>H</span><span>HOODLABS</span></a>
         <div className={styles.navCenter}><span className={styles.product}>PONS V2</span><span className={styles.networkDot} /> Mainnet</div>
         {wallet ? (
           <button className={styles.walletButton} type="button" onClick={wrongChain ? handleSwitch : undefined} disabled={walletBusy}>
