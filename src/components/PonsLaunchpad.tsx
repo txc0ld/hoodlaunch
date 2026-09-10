@@ -210,7 +210,9 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
       void reloadWallet(false);
       void loadProtocol();
     });
-  }, [invalidateReview, loadProtocol, reloadWallet]);
+  // The wallet object changes after every successful connect/refresh, including
+  // same-account retries, so cleanup follows the old provider before rebinding.
+  }, [wallet, invalidateReview, loadProtocol, reloadWallet]);
 
   useEffect(() => () => uploadController.current?.abort(), []);
   useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
