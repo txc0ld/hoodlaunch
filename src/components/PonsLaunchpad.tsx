@@ -26,7 +26,8 @@ import { holderFeeLaunchBlocker, holderFeeLaunchDraft, rememberHolderFeeIntent, 
 import type { HolderFeeLaunchBinding } from "../lib/pons-holder-fees";
 import LabHero from "./LabHero";
 import PairSelector from "./PairSelector";
-import TokenLab from "./TokenLab";
+import TokenLab, { PonsLaunchPlan } from "./TokenLab";
+import { applyPonsPlan, getPonsPlanningSnapshot, type PonsPlanInput } from "../lib/pons-planning";
 import MobileWalletConnect from "./MobileWalletConnect";
 import WalletConnection from "./WalletConnection";
 import { getWalletVersion, walletRegistry } from "../lib/wallet-provider";
@@ -463,6 +464,15 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
 
   const wrongChain = Boolean(wallet && wallet.chainId !== PONS_CHAIN_ID);
   const formBusy = ["preparing", "submitting", "pending", "unknown"].includes(submitState) || Boolean(storedOperation);
+  const planningContext = { protocol, configId: draft.configId, pairToken: draft.pairToken, pairAsset };
+  const planningSnapshot = getPonsPlanningSnapshot(planningContext);
+  const planningUnavailable = protocolLoading || Boolean(protocolError) || formBusy || recoveryBusy;
+  function applyLaunchPlan(input: PonsPlanInput) {
+    const next = applyPonsPlan(draft, input, planningContext, planningUnavailable);
+    invalidateReview();
+    setDraft(next);
+  }
+
   const mainAction = !launchEnabled ? {label:"Live launching is not enabled yet",action:()=>undefined,disabled:true} : !wallet
     ? { label: walletBusy ? "Connecting…" : "Connect wallet", action: handleConnect, disabled: walletBusy }
     : wrongChain
@@ -548,6 +558,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
 
           <label className={styles.field}><span>Developer buy <small>optional · ETH only</small></span><div className={styles.amountField}><input inputMode="decimal" disabled={isCustomPair} value={draft.developerBuyEth} onChange={(event) => updateDraft("developerBuyEth", event.target.value)} aria-label="Developer buy in ETH" /><strong>ETH</strong></div><small>{isCustomPair ? "Zero for custom quote assets. After launch, use PONS to buy with the selected asset; ETH still pays gas." : "Bought in the launch transaction. Network gas is additional."}</small></label>
 
+          <PonsLaunchPlan snapshot={planningSnapshot} creatorTaxBps={draft.creatorTaxBps} developerBuyEth={draft.developerBuyEth} disabledReason={planningUnavailable ? "Finish the current operation or wait for PONS settings to load." : !planningSnapshot ? "Choose an available PONS configuration and a verified pair to plan your launch." : ""} onApply={applyLaunchPlan} />
           <label className={styles.checkField}><input type="checkbox" checked={holderFeesRequested} disabled={formBusy} onChange={(event) => { invalidateReview(); setHolderFeesRequested(event.target.checked); }} /><span><strong>Holder fee sharing <small>Free</small></strong><small>Send this token’s future creator fee share to its holders. Currently unavailable pending contract verification. Selecting this blocks launch preparation; turn it off to prepare a normal creator-fee launch.</small></span></label>
 
           <div className={styles.advancedBlock}>
@@ -604,8 +615,8 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
         <a href={`https://www.ponsfamily.com/launchpad/${receipt.tokenAddress}`} target="_blank" rel="noopener noreferrer">Open this token on PONS →</a>
       </section>}
       {proEnabled && launchEnabled && <NodeTrading session={nodeSession} launchedTokenAddress={receipt?.pairToken ? "" : receipt?.tokenAddress || ""} />}
-      <div id="token-lab" className={styles.integrationSlot}><TokenLab proEnabled={proEnabled} /></div>
       {proPanel}
+      <div id="token-lab" className={styles.integrationSlot}><TokenLab proEnabled={proEnabled} /></div>
 
       {prepared && submitState === "review" && <div className={styles.modalBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) invalidateReview(); }}>
         <section ref={modalRef} className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="review-title" tabIndex={-1} onKeyDown={handleModalKeyDown}>

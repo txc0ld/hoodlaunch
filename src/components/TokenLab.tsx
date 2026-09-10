@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from 'react';
 import styles from './TokenLab.module.css';
+import type { PonsPlanInput, PonsPlanningSnapshot } from '../lib/pons-planning';
 import {
   TOKEN_LAB_DISCLAIMER,
   calculateAllocations,
@@ -37,6 +38,48 @@ function Field({ label, value, onChange, suffix, min = '0', max, step = 'any' }:
 
 function Readout({ label, children, accent = false }: { label: string; children: ReactNode; accent?: boolean }) {
   return <div className={`${styles.readout} ${accent ? styles.accent : ''}`}><span>{label}</span><strong>{children}</strong></div>;
+}
+
+export function PonsLaunchPlan({ snapshot, creatorTaxBps, developerBuyEth, disabledReason, onApply }: {
+  snapshot: PonsPlanningSnapshot | null;
+  creatorTaxBps: number;
+  developerBuyEth: string;
+  disabledReason: string;
+  onApply: (input: PonsPlanInput) => void;
+}) {
+  const [tax, setTax] = useState(String(creatorTaxBps / 100));
+  const [buy, setBuy] = useState(developerBuyEth);
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+  useEffect(() => {
+    setTax(String(creatorTaxBps / 100)); setBuy(developerBuyEth); setError('');
+  }, [snapshot?.key, creatorTaxBps, developerBuyEth]);
+  useEffect(() => { setNotice(''); }, [snapshot?.key]);
+  function apply() {
+    if (!snapshot || disabledReason) return;
+    try {
+      onApply({ snapshotKey: snapshot.key, creatorTaxPercent: tax, developerBuyEth: buy });
+      setError(''); setNotice('Applied to your launch form. Review the launch again before confirming.');
+    } catch (error) { setNotice(''); setError(error instanceof Error ? error.message : 'Check your launch plan.'); }
+  }
+  return <section className={styles.launchPlan} aria-labelledby="pons-plan-title">
+    <div className={styles.instrumentTitle}><div><h3 id="pons-plan-title">PONS launch plan</h3><p>These two settings can be applied to this token’s launch.</p></div></div>
+    {snapshot && <div className={styles.planTerms}>
+      <Readout label="Protocol supply">{snapshot.supply} tokens</Readout>
+      <Readout label="Curve fee">{snapshot.curveFeePercent}%</Readout>
+      <Readout label="Launch fee">{snapshot.launchFeeEth} ETH</Readout>
+    </div>}
+    <div className={styles.twoFields}>
+      <label className={styles.field}><span>Planned creator tax (%)</span><span className={styles.inputShell}><input inputMode="decimal" value={tax} maxLength={6} disabled={Boolean(disabledReason) || !snapshot} onChange={event => {setTax(event.target.value);setNotice('');}} /></span></label>
+      <label className={styles.field}><span>Planned initial buy (ETH)</span><span className={styles.inputShell}><input inputMode="decimal" value={buy} maxLength={100} disabled={Boolean(disabledReason) || !snapshot || snapshot.customPair} onChange={event => {setBuy(event.target.value);setNotice('');}} /></span></label>
+    </div>
+    <p className={styles.micro}>{snapshot?.customPair ? 'Custom pairs require a zero initial buy. Buy separately on PONS after launch.' : 'The initial buy uses ETH on Robinhood Chain. Leave enough for the launch fee and gas.'} {snapshot ? `Creator tax limit: ${snapshot.maxCreatorTaxPercent}%.` : ''}</p>
+    <button className={styles.applyPlan} type="button" disabled={Boolean(disabledReason) || !snapshot} onClick={apply}>Apply to launch</button>
+    <p className={styles.micro}>Supply and curve fees come from PONS. This snapshot is not a quote; final review checks the current terms. Applying a plan does not send a transaction.</p>
+    {disabledReason && <p className={styles.micro} role="status">{disabledReason}</p>}
+    {notice && <p className={styles.message} role="status">{notice}</p>}
+    {error && <p className={styles.error} role="alert">{error}</p>}
+  </section>;
 }
 
 export default function TokenLab({ proEnabled = false }: { proEnabled?: boolean }) {
@@ -102,10 +145,10 @@ export default function TokenLab({ proEnabled = false }: { proEnabled?: boolean 
     <div className={styles.glow} aria-hidden="true" />
     <header className={styles.header}>
       <div className={styles.labMark}><Icon name="flask" /></div>
-      <div><p className={styles.eyebrow}>STEP 02 · PLAN LOCALLY</p><h2 id="token-lab-title">Test the numbers before you launch.</h2><p>Explore supply, allocation and fee assumptions. Values stay in this tab and never enter the launch form.</p></div>
+      <div><p className={styles.eyebrow}>OPTIONAL · SIMULATIONS</p><h2 id="token-lab-title">Explore the what-ifs.</h2><p>Explore hypothetical supply, allocation and fee scenarios. These simulations are separate from the PONS launch plan above.</p></div>
       <span className={styles.tier}>{proEnabled ? 'PRO ACTIVE' : 'FREE PLAN'}</span>
     </header>
-    <div className={styles.boundary}><Icon name="atoms" /><p><strong>Generic planning model.</strong> PONS launches use protocol supply rules; this model does not allocate tokens. It cannot change actual PONS supply, fees, tax, vesting or buyback rules.</p></div>
+    <div className={styles.boundary}><Icon name="atoms" /><p><strong>Generic planning model.</strong> PONS launches use protocol supply rules; this model does not allocate tokens. It does not distribute or lock tokens, or change your launch settings.</p></div>
     <div className={styles.grid}>
       <article className={styles.instrument}>
         <div className={styles.instrumentTitle}><span>01</span><div><h3>Supply × target price</h3><p>Enter human token units and a hypothetical USD price.</p></div></div>

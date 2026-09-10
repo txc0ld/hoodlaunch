@@ -114,3 +114,9 @@
 .inputShell{border-color:#5b6053;background:#0b0d0a}.inputShell input{font-size:16px}.readout,.allocationList>div,.timelineTable,.scenarios section,.empty{border-radius:0;background:#181b16}
 .locked{border-color:#656a5a;background:#11140f}.locked a,.retry button,.scenarioControls button,.exports button{border-radius:0}
 @media(max-width:620px){.lab{border-top-width:6px;box-shadow:7px 7px 0 #050505}.lab::after{display:none}.instrument,.vesting,.scenarioBench{box-shadow:4px 4px 0 #070807}}
+
+/* Supported launch settings sit with the launch form; simulations stay below it. */
+.launchPlan{--paper:#f3f1e8;--lime:#ccff00;border:1px solid #505549;border-left:4px solid #ccff00;padding:20px;margin:22px 0;background:#121512;color:var(--paper);min-width:0}
+.launchPlan *{box-sizing:border-box}.launchPlan .instrumentTitle{margin-bottom:10px}.launchPlan .planTerms{margin-bottom:18px}.launchPlan .readout{margin-top:8px}.launchPlan .inputShell input{font-size:16px}.launchPlan .message{text-align:left;line-height:1.5}
+.applyPlan{margin-top:16px;min-height:44px;padding:10px 16px;border:1px solid #ccff00;background:#ccff00;color:#10120d;font-family:inherit;font-size:14px;font-weight:700;line-height:1.3;cursor:pointer}.applyPlan:disabled{opacity:.45;cursor:not-allowed}.launchPlan input:focus-visible,.applyPlan:focus-visible{outline:3px solid white;outline-offset:3px}
+@media(max-width:480px){.launchPlan{padding:15px 12px}.applyPlan{width:100%}}
