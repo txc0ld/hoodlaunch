@@ -30,9 +30,15 @@ Set these in the **new** Vercel project's environment settings. Never prefix cre
 | `STRIPE_WEBHOOK_SECRET` | Signing secret for this deployment's Stripe webhook endpoint. |
 | `PINATA_JWT` | New business-scoped upload credential; do not copy the owner's existing personal token. |
 
-Use separate test and live provider configuration. Run `db/001_public_services.sql` once against the new Supabase project after verifying its target. Enable email OTP with a code-bearing template, configured SMTP and appropriate provider send limits. Schedule the expired session/quota cleanup described in the migration. Test anonymous/authenticated roles cannot read service tables.
+Use separate test and live provider configuration. Run `db/001_public_services.sql`, then `db/002_holder_access.sql`, once against the new Supabase project after verifying its target. Migration002 adds service-only holder links, challenges and current-session proofs; retain both migrations in order. Enable email OTP with a code-bearing template, configured SMTP and appropriate provider send limits. Schedule the expired session/quota cleanup described in the migration. Test anonymous/authenticated roles cannot read service tables.
 
-A dedicated live HOODLABS portal configuration has been created with payment-method updates, invoice history and cancellation at the end of the paid billing period. The application must use a portal configuration whose cancellation policy matches the terms shown to customers. Register `/api/stripe-webhook` for subscription and Checkout lifecycle events. The endpoint checks signatures; actual Pro authorization comes from an active, exact-price Stripe subscription, not a redirect or webhook claim.
+A dedicated live HOODLABS portal configuration has been created with payment-method updates, invoice history and cancellation at the end of the paid billing period. The application must use a portal configuration whose cancellation policy matches the terms shown to customers. Register `/api/stripe-webhook` for subscription and Checkout lifecycle events. The endpoint checks signatures; actual Pro authorization comes from an active, exact-price Stripe subscription OR a current-session verified wallet holding at least500,000 HOODRICH. A redirect or webhook claim never grants access. The two providers are independent: a verified positive result on either path suffices even if the other provider is unavailable.
+
+## Holder eligibility
+
+No holder token/RPC values come from the client. The server pins Robinhood Chain4663, the official HOODRICH contract `0x6d5dc12131b2ad8748C54aB1Ac1b1a2cC53c2118`,18 decimals, and the inclusive500,000-token threshold. The public chain RPC is used for confirmed canonical balance/code checks. Email authentication and a fresh ownership message in the current one-hour session are required. No transfers, token approvals or custody are involved in proving holdings.
+
+Test nonce replay, concurrent verification, expiry/logout/unlink races, cross-account uniqueness, wrong origin/chain/address, balance changes and RPC failures against the migrated business test database before enabling access. Confirm holder-only accounts never get routed to a nonexistent subscription portal. Qualifying holders do not automatically cancel paid subscriptions.
 
 ## Source and deployment checks
 
