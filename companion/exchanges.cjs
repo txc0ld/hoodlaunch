@@ -6,11 +6,14 @@ function exactlyOne(rows, message) { if (rows.length !== 1) fail(message); retur
 function createExchange(provider, state, {env = process.env, request = requester(), now = Date.now} = {}) {
   const creds = credentials(provider, env), account = hash(provider + ':' + creds.key);
   // Nonces are persisted and each CLI command holds the one local process lock. No concurrent Kraken calls.
-  async function call(path, params = {}) {
+  async function call(path, params = {}, beforeRequest) {
     let data;
     if (provider === 'kraken') {
       const nonce = state.nonce(account), body = new URLSearchParams({nonce, ...params}).toString();
-      data = await request(provider, path, {method: 'POST', body, headers: {'Content-Type': 'application/x-www-form-urlencoded', 'API-Key': creds.key, 'API-Sign': krakenSignature(path, nonce, body, creds.secret)}});
+      const options = {method: 'POST', body, headers: {'Content-Type': 'application/x-www-form-urlencoded', 'API-Key': creds.key, 'API-Sign': krakenSignature(path, nonce, body, creds.secret)}};
+      // Nonce persistence/fsync can take time. Guard only after it and signature construction, directly before HTTP.
+      if (beforeRequest) beforeRequest();
+      data = await request(provider, path, options);
       if (!data || !Array.isArray(data.error) || data.error.length || !Object.hasOwn(data, 'result')) fail('Kraken did not authorize this operation. Check permissions, address verification, holds, Travel Rule and API 2FA directly in Kraken.');
       return data.result;
     }
@@ -73,9 +76,10 @@ function createExchange(provider, state, {env = process.env, request = requester
     const available = decimal(balance.availBal);
     return Object.freeze({provider, account, available: false, chainId: 1, asset: 'ETH', address: row.address, requestEth: row.amountEth, feeEth: format(fee), minimumEth: format(minimum), limitEth: format(maximum), readPermission: true, withdrawalPermission: permissions.includes('withdraw'), networkEnabled: currency.canWd === true && currency.needTag === false, amountInBounds: amount >= minimum && amount <= maximum && available >= amount + fee, reason: 'Read-only connection. OKX adds the fee to the requested amount; there is no documented request fee ceiling or complete whitelist/Travel Rule readiness preflight. Complete withdrawal in OKX.'});
   }
-  async function withdraw(review) {
+  async function withdraw(review, beforeRequest) {
     if (provider !== 'kraken') fail('Automated withdrawals are unavailable for this connector.');
-    const result = await call('/0/private/Withdraw', {asset: 'ETH', key: review.withdrawalKey, address: review.address, amount: review.requestEth, max_fee: review.feeEth});
+    if (typeof beforeRequest !== 'function') fail('A current reviewed submission guard is required.');
+    const result = await call('/0/private/Withdraw', {asset: 'ETH', key: review.withdrawalKey, address: review.address, amount: review.requestEth, max_fee: review.feeEth}, beforeRequest);
     if (!result || typeof result.refid !== 'string' || !/^[A-Za-z0-9-]{5,100}$/.test(result.refid)) fail('Kraken submission outcome is unknown. Check Kraken directly.');
     return {refid: result.refid};
   }

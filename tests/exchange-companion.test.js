@@ -136,7 +136,7 @@ test('ambiguous success response remains unknown and duplicate-blocked', async t
 });
 test('durable intent write failure prevents the withdrawal request', async t => {
   const h = await setup(t), r = await review(h), original = h.state.write;
-  h.state.write = (key, value) => { if (key.startsWith('destination-')) throw Error('mock disk full'); return original(key, value); };
+  h.state.write = (key, value) => { if (key.startsWith('intent-')) throw Error('mock disk full'); return original(key, value); };
   await assert.rejects(() => send(h, r), /disk full/); h.state.write = original;
   assert.equal(withdrawals(h).length, 0); await assert.rejects(() => send(h, r), /already has a submission/);
 });
@@ -188,4 +188,33 @@ test('plan is copied before asynchronous inspection; rechecked key/account and c
   const other = createExchange('kraken', h.state, {env: {...inert, KRAKEN_API_KEY: 'different-inert-key'}, request: h.request});
   await assert.rejects(() => execute(h.state, other, r.id, r.confirmation, {env: live, now: h.now}), /another exchange key/);
   assert.equal(withdrawals(h).length, 0);
+});
+test('partial marker persistence blocks changed UUID; first-write failure without any record sends nothing', async t => {
+  for (const mode of ['first-before', 'first-after', 'second-before']) {
+    const h = await setup(t), r = await review(h), original = h.state.write;
+    h.state.write = (key, value) => {
+      if (mode === 'first-before' && key.startsWith('destination-')) throw Error('injected marker failure');
+      if (mode === 'second-before' && key.startsWith('intent-')) throw Error('injected marker failure');
+      const result = original(key, value);
+      if (mode === 'first-after' && key.startsWith('destination-')) throw Error('injected marker failure');
+      return result;
+    };
+    await assert.rejects(() => send(h, r), /marker failure/); h.state.write = original;
+    assert.equal(withdrawals(h).length, 0);
+    const changed = input(); changed.id = crypto.randomUUID();
+    if (mode === 'first-before') { assert.equal(h.state.read('destination-' + hash(A)), null); await prepare(h.state, h.exchange, changed, 1, '0.01', h.now); }
+    else await assert.rejects(() => prepare(h.state, h.exchange, changed, 1, '0.01', h.now), /already has a submission/);
+  }
+});
+test('expiry crossed during durable marker writes prevents HTTP and keeps the duplicate barrier', async t => {
+  const h = await setup(t), r = await review(h), original = h.state.write; h.advance(299999);
+  h.state.write = (key, value) => { const result = original(key, value); if (key.startsWith('destination-')) h.advance(2); return result; };
+  await assert.rejects(() => send(h, r), /expired/); h.state.write = original; assert.equal(withdrawals(h).length, 0);
+  const changed = input(); changed.id = crypto.randomUUID(); await assert.rejects(() => prepare(h.state, h.exchange, changed, 1, '0.01', h.now), /already has a submission/);
+});
+test('expiry crossed during withdrawal-specific nonce fsync prevents the final POST', async t => {
+  const h = await setup(t), r = await review(h), original = h.state.nonce; h.advance(299999); let count = 0;
+  h.state.nonce = account => { const value = original(account); if (++count === 5) h.advance(2); return value; };
+  await assert.rejects(() => send(h, r), /expired/); assert.equal(count, 5); assert.equal(withdrawals(h).length, 0);
+  assert.equal(h.state.read('destination-' + hash(A)).status, 'unknown');
 });
