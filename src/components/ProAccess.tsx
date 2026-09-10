@@ -85,7 +85,7 @@ export default function ProAccess({ onAccessChange, salesEnabled = false }: { on
       {access.signedIn && <div className={styles.controls}>
         <button disabled={busy} onClick={() => void verifyWallet()}>{access.holder?.verified ? 'Verify wallet again' : 'Verify holding wallet'}</button>
         <button disabled={busy} onClick={() => void refresh()}>Refresh Pro access</button>
-        {access.holder?.address && <button disabled={busy} onClick={() => void act('holder-unlink')}>Unlink holding wallet</button>}
+        <button disabled={busy} onClick={() => void act('holder-unlink')}>Unlink holding wallet</button>
       </div>}
       <p className={styles.note}>Standard wallets only; smart contract and delegated wallets are not supported for this proof yet. One wallet can link to one account. Unlink before changing wallets, and verify again after signing in to a new session. Balances are rechecked for managed services and about every minute in this workspace. If you fall below the threshold, holder access ends on the next check. Becoming eligible does not cancel an existing subscription; manage it separately if you choose.</p>
     </div>
