@@ -3,7 +3,7 @@ import { fail } from './public-security';
 
 type Db = { rpc(name: string, args: Record<string, unknown>): PromiseLike<{ data: unknown; error: unknown }> };
 type Request = Stripe.Checkout.SessionCreateParams & { customer: string; client_reference_id: string; expires_at: number };
-type Reservation = { key: string; expires_at: number; request: Request; session_id: string | null };
+type Reservation = { key: string; expires_at: number; request: Request; session_id: string | null; subscription_id: string | null };
 const MIN_REMAINING_SECONDS = 31 * 60;
 function reconcile(): never { return fail(409, 'CHECKOUT_RECONCILE', 'Your previous checkout needs reconciliation. Open billing or contact support; a second checkout was not created.'); }
 function stable(value: unknown): string {
@@ -14,6 +14,7 @@ function stable(value: unknown): string {
 function reservation(value: unknown, expected: Stripe.Checkout.SessionCreateParams): Reservation {
   const r = value as Reservation;
   if (!r || typeof r.key !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(r.key) || !Number.isSafeInteger(r.expires_at) || r.expires_at < 1 || !r.request || r.request.expires_at !== r.expires_at || (r.session_id !== null && (typeof r.session_id !== 'string' || !/^cs_[A-Za-z0-9_]+$/.test(r.session_id)))) reconcile();
+  if (r.subscription_id !== null && (typeof r.subscription_id !== 'string' || !/^sub_[A-Za-z0-9]+$/.test(r.subscription_id) || !r.session_id)) reconcile();
   const { expires_at: _expiry, ...rest } = r.request;
   if (stable(rest) !== stable(expected)) reconcile();
   return r;
@@ -43,8 +44,8 @@ export async function subscriptionCheckout(db: Db, stripe: Stripe, user: string,
   portalConfiguration(); // A payable checkout must have a configured subscription-management path.
   if (!/^price_[A-Za-z0-9]+$/.test(price) || !/^cus_[A-Za-z0-9]+$/.test(customer)) reconcile();
   const request: Stripe.Checkout.SessionCreateParams = { mode: 'subscription', customer, client_reference_id: user, line_items: [{ price, quantity: 1 }], subscription_data: { metadata: { hood_user_id: user } }, success_url: appOrigin + '/?billing=return', cancel_url: appOrigin + '/?billing=cancelled', allow_promotion_codes: false };
-  async function reserve(previous?: Reservation) {
-    const { data, error } = await db.rpc('hood_checkout_reserve', { p_user: user, p_request: request, p_expected_key: previous?.key || null, p_expired_session: previous?.session_id || null });
+  async function reserve(previous?: Reservation, canceledSubscription?: string) {
+    const { data, error } = await db.rpc('hood_checkout_reserve', { p_user: user, p_request: request, p_expected_key: previous?.key || null, p_expired_session: previous?.session_id || null, p_canceled_subscription: canceledSubscription || null });
     if (error) reconcile();
     return reservation(data, request);
   }
@@ -65,7 +66,25 @@ export async function subscriptionCheckout(db: Db, stripe: Stripe, user: string,
       session = await stripe.checkout.sessions.retrieve(created.id, { expand: ['line_items.data.price'] });
     }
     validateSession(session, r);
-    if (session.status === 'complete') return billingPortal(stripe, customer, appOrigin);
+    if (session.status === 'complete') {
+      const subscriptionId = session.subscription;
+      if (typeof subscriptionId !== 'string' || !/^sub_[A-Za-z0-9]+$/.test(subscriptionId) || (r.subscription_id && r.subscription_id !== subscriptionId)) reconcile();
+      const subscription = await stripe.subscriptions.retrieve(subscriptionId, { expand: ['items.data.price'] });
+      if (subscription.id !== subscriptionId || subscription.customer !== customer || !subscription.items || subscription.items.has_more || subscription.items.data.length !== 1 || subscription.items.data[0].price.id !== price || subscription.items.data[0].quantity !== 1) reconcile();
+      const { data, error } = await db.rpc('hood_checkout_bind_subscription', { p_user: user, p_key: r.key, p_session: r.session_id, p_subscription: subscriptionId });
+      if (error) reconcile();
+      if (data !== true) {
+        // A delayed request may lose to a newer checkout generation. Never overwrite that winner.
+        const current = await reserve();
+        if (current.key === r.key) reconcile();
+        r = current; continue;
+      }
+      r = { ...r, subscription_id: subscriptionId };
+      if (subscription.status !== 'canceled') return billingPortal(stripe, customer, appOrigin);
+      if (attempt === 1) reconcile();
+      // Canceled is terminal at Stripe; scheduled cancellation or payment uncertainty never qualifies.
+      r = await reserve(r, subscriptionId); continue;
+    }
     if (session.status === 'open') {
       if (session.expires_at <= Math.floor(now() / 1000)) reconcile();
       return hostedUrl(session.url, 'checkout.stripe.com');

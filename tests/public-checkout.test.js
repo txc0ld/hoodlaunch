@@ -9,22 +9,23 @@ const user='11111111-1111-1111-1111-111111111111', customer='cus_A', origin='htt
 async function harness(t) {
  const db=new PGlite(); await db.exec('create role anon; create role authenticated; create role service_role bypassrls; create schema auth; create table auth.users(id uuid primary key);');
  await db.exec(fs.readFileSync('db/001_public_services.sql','utf8'));await db.query('insert into auth.users values($1)',[user]);await db.query('insert into public.hood_billing(user_id,customer_id) values($1,$2)',[user,customer]);await db.exec('set role service_role');
- const calls=[],sessions=new Map(),cache=new Map(),controls={};let now=Date.now();
- const database={rpc:async(name,args)=>{if(controls.databaseDelay){now+=controls.databaseDelay;controls.databaseDelay=0;}if(name==='hood_checkout_bind' && controls.bindFail)return {data:null,error:{message:'injected write failure'}};
-  try{const query=name==='hood_checkout_reserve'?'select public.hood_checkout_reserve($1,$2::jsonb,$3,$4) as result':'select public.hood_checkout_bind($1,$2,$3) as result';
-   const values=name==='hood_checkout_reserve'?[args.p_user,JSON.stringify(args.p_request),args.p_expected_key,args.p_expired_session]:[args.p_user,args.p_key,args.p_session];
+ const calls=[],sessions=new Map(),subscriptions=new Map([['sub_A',{id:'sub_A',customer,status:'active',cancel_at_period_end:false,items:{has_more:false,data:[{price:{id:'price_fixed'},quantity:1}]}}]]),cache=new Map(),controls={};let now=Date.now();
+ const database={rpc:async(name,args)=>{if(controls.databaseDelay){now+=controls.databaseDelay;controls.databaseDelay=0;}if((name==='hood_checkout_bind' && controls.bindFail) || (name==='hood_checkout_bind_subscription' && controls.subscriptionBindFail))return {data:null,error:{message:'injected write failure'}};
+  try{const query=name==='hood_checkout_reserve'?'select public.hood_checkout_reserve($1,$2::jsonb,$3,$4,$5) as result':name==='hood_checkout_bind_subscription'?'select public.hood_checkout_bind_subscription($1,$2,$3,$4) as result':'select public.hood_checkout_bind($1,$2,$3) as result';
+   const values=name==='hood_checkout_reserve'?[args.p_user,JSON.stringify(args.p_request),args.p_expected_key,args.p_expired_session,args.p_canceled_subscription||null]:name==='hood_checkout_bind_subscription'?[args.p_user,args.p_key,args.p_session,args.p_subscription]:[args.p_user,args.p_key,args.p_session];
    const result=await db.query(query,values);return {data:result.rows[0].result,error:null};}catch(error){return {data:null,error};}}};
  const stripe={checkout:{sessions:{create:async(payload,options)=>{calls.push({type:'create',payload:JSON.parse(JSON.stringify(payload)),key:options.idempotencyKey});
    if(controls.failBefore){controls.failBefore=false;throw Error('transport failed before creation');}
    const old=cache.get(options.idempotencyKey);if(old && now-old.created<86400000){assert.deepEqual(JSON.parse(JSON.stringify(payload)),old.payload);return sessions.get(old.id);}
-   const id='cs_test_'+(sessions.size+1),session={id,customer:payload.customer,mode:payload.mode,client_reference_id:payload.client_reference_id,expires_at:payload.expires_at,success_url:payload.success_url,cancel_url:payload.cancel_url,status:'open',url:'https://checkout.stripe.com/c/pay/'+id,line_items:{has_more:false,data:[{quantity:1,price:{id:payload.line_items[0].price}}]}};
+   const id='cs_test_'+(sessions.size+1),session={id,customer:payload.customer,mode:payload.mode,client_reference_id:payload.client_reference_id,expires_at:payload.expires_at,success_url:payload.success_url,cancel_url:payload.cancel_url,status:'open',subscription:'sub_A',url:'https://checkout.stripe.com/c/pay/'+id,line_items:{has_more:false,data:[{quantity:1,price:{id:payload.line_items[0].price}}]}};
    sessions.set(id,session);cache.set(options.idempotencyKey,{created:now,id,payload:JSON.parse(JSON.stringify(payload))});
    if(controls.failAfter){controls.failAfter=false;throw Error('transport failed after creation');}return session;},
    retrieve:async(id,params)=>{calls.push({type:'retrieve',id});assert.deepEqual(Array.from(params.expand),['line_items.data.price']);if(controls.retrieveFail)throw Error('transport failed retrieving');return sessions.get(id);}}},
+  subscriptions:{retrieve:async(id)=>{calls.push({type:'subscription',id});if(controls.subscriptionReadDelay)await controls.subscriptionReadDelay();if(controls.subscriptionFail)throw Error('subscription read failed');return subscriptions.get(id);}},
   billingPortal:{sessions:{create:async(params)=>{calls.push({type:'portal',params});return {url:'https://billing.stripe.com/p/session/test'};}}}};
  const oldPortal=process.env.STRIPE_PORTAL_CONFIGURATION_ID;process.env.STRIPE_PORTAL_CONFIGURATION_ID='bpc_HOODLABS';
  t.after(async()=>{if(oldPortal===undefined)delete process.env.STRIPE_PORTAL_CONFIGURATION_ID;else process.env.STRIPE_PORTAL_CONFIGURATION_ID=oldPortal;await db.close();});
- return {db,database,stripe,calls,sessions,controls,now:()=>now,advance:ms=>{now+=ms;},run:(price='price_fixed',url=origin)=>subscriptionCheckout(database,stripe,user,customer,price,url,()=>now)};
+ return {db,database,stripe,calls,sessions,subscriptions,controls,now:()=>now,advance:ms=>{now+=ms;},run:(price='price_fixed',url=origin)=>subscriptionCheckout(database,stripe,user,customer,price,url,()=>now)};
 }
 function creates(h){return h.calls.filter(c=>c.type==='create');}
 test('durable checkout uses fixed 23h expiry, binds ID, retrieves and reuses one open session',async t=>{
@@ -89,4 +90,58 @@ test('missing or malformed portal configuration blocks checkout before reservati
    await assert.rejects(h.run(),/configuration/);assert.equal(h.calls.length,0);
    assert.equal((await h.db.query('select checkout_key from hood_billing')).rows[0].checkout_key,null);
  }
+});
+test('verified terminal cancellation creates exactly one new checkout generation',async t=>{
+ const h=await harness(t);await h.run();h.sessions.get('cs_test_1').status='complete';h.subscriptions.get('sub_A').status='canceled';
+ const old=(await h.db.query('select * from hood_billing')).rows[0];const url=await h.run();assert.match(url,/cs_test_2/);await h.run();assert.equal(h.sessions.size,2);
+ const current=(await h.db.query('select * from hood_billing')).rows[0];assert.notEqual(current.checkout_key,old.checkout_key);assert.equal(current.checkout_session_id,'cs_test_2');assert.equal(current.checkout_subscription_id,null);
+ assert.notEqual(creates(h)[0].key,creates(h)[1].key);
+});
+test('scheduled cancellation and every non-canceled or unknown status stay in the portal',async t=>{
+ const h=await harness(t);await h.run();h.sessions.get('cs_test_1').status='complete';const subscription=h.subscriptions.get('sub_A');
+ for(const status of ['active','past_due','unpaid','paused','incomplete','incomplete_expired','trialing','unknown']){
+   subscription.status=status;subscription.cancel_at_period_end=true;assert.match(await h.run(),/billing.stripe.com/);assert.equal(h.sessions.size,1);
+ }
+ assert.equal((await h.db.query('select checkout_subscription_id from hood_billing')).rows[0].checkout_subscription_id,'sub_A');
+});
+test('missing or drifting subscription identity, customer, price and quantity never rotate',async t=>{
+ const h=await harness(t);await h.run();const session=h.sessions.get('cs_test_1'),subscription=h.subscriptions.get('sub_A');session.status='complete';
+ for(const bad of [null,'bad',{id:'sub_A'}]){session.subscription=bad;await assert.rejects(h.run());}session.subscription='sub_A';
+ for(const [field,value] of [['id','sub_other'],['customer','cus_other']]){const old=subscription[field];subscription[field]=value;await assert.rejects(h.run());subscription[field]=old;}
+ const item=subscription.items.data[0];for(const mutation of [()=>item.quantity=2,()=>item.price.id='price_other',()=>subscription.items.has_more=true,()=>subscription.items.data.push({...item})]){
+   mutation();await assert.rejects(h.run());item.quantity=1;item.price.id='price_fixed';subscription.items.has_more=false;subscription.items.data=[item];
+ }
+ await h.run(); // Binds sub_A while active.
+ h.subscriptions.set('sub_other',{...subscription,id:'sub_other',status:'canceled'});session.subscription='sub_other';await assert.rejects(h.run());
+ assert.equal(creates(h).length,1);assert.equal(h.sessions.size,1);
+});
+test('subscription retrieval and durable binding failures do not permit rejoin',async t=>{
+ const h=await harness(t);await h.run();h.sessions.get('cs_test_1').status='complete';h.subscriptions.get('sub_A').status='canceled';
+ h.controls.subscriptionFail=true;await assert.rejects(h.run());h.controls.subscriptionFail=false;
+ h.controls.subscriptionBindFail=true;await assert.rejects(h.run());h.controls.subscriptionBindFail=false;
+ assert.equal(creates(h).length,1);assert.equal((await h.db.query('select checkout_subscription_id from hood_billing')).rows[0].checkout_subscription_id,null);
+});
+test('delayed canceled-subscription requests lose CAS safely and reuse one winning checkout',async t=>{
+ const h=await harness(t);await h.run();h.sessions.get('cs_test_1').status='complete';h.subscriptions.get('sub_A').status='canceled';
+ let release,entered;const gate=new Promise(resolve=>{release=resolve;}),started=new Promise(resolve=>{entered=resolve;});let reads=0;
+ h.controls.subscriptionReadDelay=async()=>{if(++reads===1){entered();await gate;}};
+ const delayed=h.run();await started;const immediate=await Promise.all([h.run(),h.run(),h.run()]);release();const late=await delayed;
+ assert.ok(immediate.every(url=>url===late));assert.equal(h.sessions.size,2);
+ const keys=new Set(creates(h).slice(1).map(call=>call.key));assert.equal(keys.size,1);
+});
+test('subscription binding is immutable and rotation compares key, session and subscription',async t=>{
+ const h=await harness(t);await h.run();h.sessions.get('cs_test_1').status='complete';await h.run();const old=(await h.db.query('select * from hood_billing')).rows[0];
+ assert.equal((await h.database.rpc('hood_checkout_bind_subscription',{p_user:user,p_key:old.checkout_key,p_session:old.checkout_session_id,p_subscription:'sub_other'})).data,false);
+ const request={...creates(h)[0].payload};delete request.expires_at;
+ for(const change of [{p_canceled_subscription:'sub_other'},{p_expired_session:'cs_test_other'},{p_expected_key:'22222222-2222-2222-2222-222222222222'},{p_canceled_subscription:null}]){
+   const result=await h.database.rpc('hood_checkout_reserve',{p_user:user,p_request:request,p_expected_key:old.checkout_key,p_expired_session:old.checkout_session_id,p_canceled_subscription:'sub_A',...change});assert.equal(result.data.key,old.checkout_key);
+ }
+ h.subscriptions.get('sub_A').status='canceled';await h.run();const current=(await h.db.query('select * from hood_billing')).rows[0];
+ assert.equal((await h.database.rpc('hood_checkout_bind_subscription',{p_user:user,p_key:old.checkout_key,p_session:old.checkout_session_id,p_subscription:'sub_A'})).data,false);
+ const stale=await h.database.rpc('hood_checkout_reserve',{p_user:user,p_request:request,p_expected_key:old.checkout_key,p_expired_session:old.checkout_session_id,p_canceled_subscription:'sub_A'});assert.equal(stale.data.key,current.checkout_key);
+ await h.db.exec('reset role;set role anon');await assert.rejects(h.db.query('select public.hood_checkout_bind_subscription($1,$2,$3,$4)',[user,old.checkout_key,old.checkout_session_id,'sub_A']));
+});
+test('canceled rejoin still requires portal configuration and exact configured price',async t=>{
+ const h=await harness(t);await h.run();h.sessions.get('cs_test_1').status='complete';h.subscriptions.get('sub_A').status='canceled';
+ await assert.rejects(()=>h.run('price_new'));delete process.env.STRIPE_PORTAL_CONFIGURATION_ID;await assert.rejects(h.run(),/configuration/);assert.equal(h.sessions.size,1);
 });

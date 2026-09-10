@@ -43,8 +43,9 @@ grant all on public.hood_sessions, public.hood_billing, public.hood_quota to ser
 -- Full Stripe request parameters remain immutable for each idempotency key.
 alter table public.hood_billing add column checkout_key uuid, add column checkout_started timestamptz,
  add column checkout_expires_at bigint, add column checkout_request jsonb,
- add column checkout_session_id text check (checkout_session_id ~ '^cs_[A-Za-z0-9_]+$');
-create function public.hood_checkout_reserve(p_user uuid, p_request jsonb, p_expected_key uuid default null, p_expired_session text default null)
+ add column checkout_session_id text check (checkout_session_id ~ '^cs_[A-Za-z0-9_]+$'),
+ add column checkout_subscription_id text check (checkout_subscription_id ~ '^sub_[A-Za-z0-9]+$');
+create function public.hood_checkout_reserve(p_user uuid, p_request jsonb, p_expected_key uuid default null, p_expired_session text default null, p_canceled_subscription text default null)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare b public.hood_billing; expiry bigint;
 begin
@@ -55,18 +56,20 @@ begin
     p_request->>'client_reference_id' is distinct from p_user::text then raise exception 'invalid checkout request'; end if;
  if b.checkout_key is not null then
    if b.checkout_request - 'expires_at' is distinct from p_request then raise exception 'checkout configuration changed; reconcile existing intent'; end if;
-   -- Only a server-verified expired Stripe session can authorize this compare-and-swap.
+   -- Only a verified expired session or its verified terminal canceled subscription authorizes rotation.
    -- A concurrent winner is returned unchanged; unknown/sessionless reservations never rotate.
    if p_expected_key is null or b.checkout_key <> p_expected_key or b.checkout_session_id is null or
-      p_expired_session is null or b.checkout_session_id <> p_expired_session then
-     return jsonb_build_object('key',b.checkout_key,'expires_at',b.checkout_expires_at,'request',b.checkout_request,'session_id',b.checkout_session_id);
+      p_expired_session is null or b.checkout_session_id <> p_expired_session or
+      (p_canceled_subscription is null and b.checkout_subscription_id is not null) or
+      (p_canceled_subscription is not null and b.checkout_subscription_id is distinct from p_canceled_subscription) then
+     return jsonb_build_object('key',b.checkout_key,'expires_at',b.checkout_expires_at,'request',b.checkout_request,'session_id',b.checkout_session_id,'subscription_id',b.checkout_subscription_id);
    end if;
  end if;
  expiry := floor(extract(epoch from now()))::bigint + 23*60*60;
  update public.hood_billing set checkout_key=gen_random_uuid(),checkout_started=now(),checkout_expires_at=expiry,
-   checkout_request=p_request || jsonb_build_object('expires_at',expiry),checkout_session_id=null
+   checkout_request=p_request || jsonb_build_object('expires_at',expiry),checkout_session_id=null,checkout_subscription_id=null
    where user_id=p_user returning * into b;
- return jsonb_build_object('key',b.checkout_key,'expires_at',b.checkout_expires_at,'request',b.checkout_request,'session_id',b.checkout_session_id);
+ return jsonb_build_object('key',b.checkout_key,'expires_at',b.checkout_expires_at,'request',b.checkout_request,'session_id',b.checkout_session_id,'subscription_id',b.checkout_subscription_id);
 end $$;
 create function public.hood_checkout_bind(p_user uuid,p_key uuid,p_session text) returns boolean
 language plpgsql security definer set search_path = '' as $$
@@ -78,7 +81,18 @@ begin
  get diagnostics changed = row_count;
  return changed=1;
 end $$;
-revoke all on function public.hood_checkout_reserve(uuid,jsonb,uuid,text), public.hood_checkout_bind(uuid,uuid,text) from public,anon,authenticated;
-grant execute on function public.hood_checkout_reserve(uuid,jsonb,uuid,text), public.hood_checkout_bind(uuid,uuid,text) to service_role;
+create function public.hood_checkout_bind_subscription(p_user uuid,p_key uuid,p_session text,p_subscription text) returns boolean
+language plpgsql security definer set search_path = '' as $$
+declare changed integer;
+begin
+ if p_subscription is null or p_subscription !~ '^sub_[A-Za-z0-9]+$' then raise exception 'invalid subscription'; end if;
+ update public.hood_billing set checkout_subscription_id=p_subscription
+ where user_id=p_user and checkout_key=p_key and checkout_session_id=p_session
+   and (checkout_subscription_id is null or checkout_subscription_id=p_subscription);
+ get diagnostics changed = row_count;
+ return changed=1;
+end $$;
+revoke all on function public.hood_checkout_reserve(uuid,jsonb,uuid,text,text), public.hood_checkout_bind(uuid,uuid,text), public.hood_checkout_bind_subscription(uuid,uuid,text,text) from public,anon,authenticated;
+grant execute on function public.hood_checkout_reserve(uuid,jsonb,uuid,text,text), public.hood_checkout_bind(uuid,uuid,text), public.hood_checkout_bind_subscription(uuid,uuid,text,text) to service_role;
 
 commit;
