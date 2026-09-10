@@ -16,7 +16,7 @@ export type HolderAccess = {
   unavailable: boolean;
 };
 export type ProStatus = { pro: boolean; subscription: boolean; subscriptionUnavailable: boolean; holder: HolderAccess };
-export type ProAccessState = ProStatus & { configured: boolean; signInAvailable: boolean; signedIn: boolean; billing: boolean; billingAccount: boolean; billingAccountUnavailable: boolean };
+export type ProAccessState = ProStatus & { sessionIdentity: string | null; configured: boolean; signInAvailable: boolean; signedIn: boolean; billing: boolean; billingAccount: boolean; billingAccountUnavailable: boolean };
 export const EMPTY_HOLDER_ACCESS: HolderAccess = { address: null, verified: false, eligible: false, granted: false, balance: null, unavailable: false };
-export const EMPTY_PRO_ACCESS: ProAccessState = { configured: false, signInAvailable: false, signedIn: false, pro: false, billing: false, billingAccount: false, billingAccountUnavailable: false, subscription: false, subscriptionUnavailable: false, holder: EMPTY_HOLDER_ACCESS };
+export const EMPTY_PRO_ACCESS: ProAccessState = { sessionIdentity: null, configured: false, signInAvailable: false, signedIn: false, pro: false, billing: false, billingAccount: false, billingAccountUnavailable: false, subscription: false, subscriptionUnavailable: false, holder: EMPTY_HOLDER_ACCESS };
 export type HolderChallenge = { challengeId: string; message: string; address: string; chainId: number };

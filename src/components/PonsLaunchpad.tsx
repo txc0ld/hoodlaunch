@@ -113,8 +113,8 @@ function normalizeSocialUrl(value: string, host?: string) {
   return `https://${host && !withoutScheme.includes(".") ? `${host}/${withoutScheme}` : withoutScheme}`;
 }
 
-export interface PonsLaunchpadProps { proEnabled?: boolean; proPanel?: ReactNode; launchEnabled?: boolean; }
-export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled=false}: PonsLaunchpadProps) {
+export interface PonsLaunchpadProps { generationEnabled?: boolean; sessionIdentity?: string | null; proEnabled?: boolean; proPanel?: ReactNode; launchEnabled?: boolean; }
+export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled=false, generationEnabled=false, sessionIdentity=null}: PonsLaunchpadProps) {
   const [protocol, setProtocol] = useState<ProtocolState | null>(null);
   const [protocolError, setProtocolError] = useState("");
   const [protocolLoading, setProtocolLoading] = useState(true);
@@ -500,7 +500,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
       <LabHero />
       <nav className={styles.utilityNav} aria-label="HOODLABS resources"><span>GET READY</span><a href="/guide" target="_blank" rel="noopener noreferrer">How it works</a><a href="/pro" target="_blank" rel="noopener noreferrer">Free vs Pro</a><a href="/exchanges" target="_blank" rel="noopener noreferrer">Fund wallets</a><a href="/security" target="_blank" rel="noopener noreferrer">Stay safe</a></nav>
       {!launchEnabled && <p className={styles.pendingNotice} role="status">Launch preview — live launching is not enabled yet.</p>}
-      {proEnabled && launchEnabled && <NodeManager onSessionChange={setNodeSession} />}
+      {generationEnabled && (sessionIdentity ? <NodeManager key={`${sessionIdentity}:${proEnabled}`} sessionIdentity={sessionIdentity} proEnabled={proEnabled} financeEnabled={proEnabled && launchEnabled} onSessionChange={setNodeSession} /> : <p>Free accounts can create one wallet every 24 hours. <a href="#pro-account">Sign in to use wallet creation and recovery.</a></p>)}
 
       <section id="launch" className={styles.shell} aria-labelledby="launch-title">
         <div className={styles.formPane}>

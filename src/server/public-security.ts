@@ -21,6 +21,8 @@ export function writeGuard(req: NextApiRequest) {
   if (count !== 1 || req.headers.origin !== expected || (req.headers['sec-fetch-site'] && req.headers['sec-fetch-site'] !== 'same-origin')) fail(403, 'ORIGIN', 'Open this action from the launchpad website.');
 }
 export function digest(value: string) { return createHash('sha256').update(value).digest('hex'); }
+/** Public stale-view fence; never an authentication credential or stored token hash. */
+export function publicSessionIdentity(token: string) { return digest('hoodlabs:public-session:' + token); }
 export function sessionToken() { return randomBytes(32).toString('hex'); }
 export function cookieName() { return process.env.NODE_ENV === 'production' ? '__Host-hood-session' : 'hood-session'; }
 export function readToken(req: NextApiRequest) {

@@ -6,7 +6,7 @@ import { verifyHolderWallet } from '../lib/holder-wallet';
 import { getWalletProvider, getWalletVersion, subscribeWalletProvider } from '../lib/wallet-provider';
 type Access = ProAccessState;
 const NONE = EMPTY_PRO_ACCESS;
-export default function ProAccess({ onAccessChange, salesEnabled = false }: { onAccessChange: (value: boolean) => void; salesEnabled?: boolean }) {
+export default function ProAccess({ onAccessChange, onSessionIdentityChange, salesEnabled = false }: { onAccessChange: (value: boolean) => void; salesEnabled?: boolean; onSessionIdentityChange?: (value: string | null) => void }) {
   const [access, setAccess] = useState<Access>(NONE);
   const [email, setEmail] = useState(''); const [code, setCode] = useState('');
   const [sent, setSent] = useState(false); const [busy, setBusy] = useState(false); const [message, setMessage] = useState('Checking account services…');
@@ -26,10 +26,18 @@ export default function ProAccess({ onAccessChange, salesEnabled = false }: { on
       const result = await request('status') as Access;
       if (!mounted.current || accountMutation.current || sequence !== generation.current) return;
       if (result.signInAvailable !== true) { setSent(false); setCode(''); }
+      onSessionIdentityChange?.(result.signedIn === true && typeof result.sessionIdentity === 'string' && /^[a-f0-9]{64}$/.test(result.sessionIdentity) ? result.sessionIdentity : null);
       setAccess(result); onAccessChange(result.pro === true); setMessage(!result.configured ? 'Pro account services are being prepared. Free launch configuration is available below.' : !result.pro && (result.subscriptionUnavailable || result.holder?.unavailable) ? 'Access could not be fully verified. Retry when the service is available.' : '');
-    } catch (error) { if (!mounted.current || accountMutation.current || sequence !== generation.current) return; setAccess(NONE); onAccessChange(false); setMessage(error instanceof Error ? error.message : 'Account services are unavailable.'); }
-  }, [onAccessChange, request]);
-  useEffect(() => { mounted.current = true; void refresh(); const timer = setInterval(() => void refresh(), 60000); const focus = () => void refresh(); window.addEventListener('focus', focus); return () => { mounted.current = false; walletGeneration.current++; generation.current++; clearInterval(timer); window.removeEventListener('focus', focus); onAccessChange(false); }; }, [refresh, onAccessChange]);
+    } catch (error) { if (!mounted.current || accountMutation.current || sequence !== generation.current) return; setAccess(NONE); onSessionIdentityChange?.(null); onAccessChange(false); setMessage(error instanceof Error ? error.message : 'Account services are unavailable.'); }
+  }, [onAccessChange, onSessionIdentityChange, request]);
+  useEffect(() => {
+    mounted.current = true; void refresh();
+    const timer = setInterval(() => void refresh(), 60000);
+    const focus = () => void refresh();
+    const visible = () => { if (document.visibilityState === 'visible') void refresh(); };
+    window.addEventListener('focus', focus); document.addEventListener('visibilitychange', visible);
+    return () => { mounted.current = false; walletGeneration.current++; generation.current++; clearInterval(timer); window.removeEventListener('focus', focus); document.removeEventListener('visibilitychange', visible); onSessionIdentityChange?.(null); onAccessChange(false); };
+  }, [refresh, onAccessChange, onSessionIdentityChange]);
   useEffect(() => subscribeWalletProvider(() => { walletGeneration.current++; }), []);
   async function verifyWallet() {
     if (busy || walletBusy.current || !access.signedIn) return;
@@ -48,6 +56,7 @@ export default function ProAccess({ onAccessChange, salesEnabled = false }: { on
   }
   async function act(action: string) {
     if (busy || walletBusy.current || accountMutation.current) return; accountMutation.current = true; generation.current++; setBusy(true); setMessage('');
+    if (action === 'logout') onSessionIdentityChange?.(null);
     if (action === 'logout' || action === 'holder-unlink') { walletGeneration.current++; generation.current++; onAccessChange(false); }
     try {
       const result = await request(action, { email, code }); setCode('');
@@ -60,8 +69,8 @@ export default function ProAccess({ onAccessChange, salesEnabled = false }: { on
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Request failed.'); }
     finally { accountMutation.current = false; if (mounted.current) setBusy(false); }
   }
-  return <section className={styles.panel} aria-labelledby="pro-title">
-    <div><p className={styles.label}>HOODLABS PRO · {PRO_PRICE_LABEL}</p><h2 id="pro-title">One launch. Up to 50 wallets.</h2><p>Token launching stays free. Pro adds the generated-wallet workspace and managed uploads. Subscribe for {PRO_PRICE_LABEL} or qualify by holding {HOODRICH_MINIMUM_FORMATTED} HOODRICH ($RICH).</p></div>
+  return <section id="pro-account" className={styles.panel} aria-labelledby="pro-title">
+    <div><p className={styles.label}>HOODLABS PRO · {PRO_PRICE_LABEL}</p><h2 id="pro-title">One launch. Up to 50 wallets.</h2><p>Token launching stays free. Free accounts can create one wallet every 24 hours when wallet creation is available. Pro adds bulk creation of up to 50 wallets and managed uploads. Subscribe for {PRO_PRICE_LABEL} or qualify by holding {HOODRICH_MINIMUM_FORMATTED} HOODRICH ($RICH).</p></div>
     {access.pro ? <p className={styles.active}>Pro active{access.holder?.granted ? ' · wallet grant' : access.holder?.eligible ? ' · HOODRICH holder' : ' · subscription'} · 50 upload attempts per day</p> : <p className={styles.note}>Your wallet keys stay in this browser. Account services never receive your seed phrase, backup password or exchange credentials. Network and protocol fees still apply.</p>}
     {access.configured && !access.signedIn && access.signInAvailable !== true && <p role="status">Email sign-in is temporarily unavailable. Free launch planning remains available.</p>}
     {access.configured && !access.signedIn && access.signInAvailable === true && <form onSubmit={event => { event.preventDefault(); void act(sent ? 'verify-code' : 'request-code'); }} className={styles.controls}>

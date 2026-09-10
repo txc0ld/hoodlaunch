@@ -15,6 +15,7 @@ import { getNodeBalances } from "../lib/node-balances";
 import type { NodeBalanceSnapshot } from "../lib/node-balances";
 import NodeBridge from "./NodeBridge";
 import ExchangeFunding from "./ExchangeFunding";
+import { GenerationError, nodeGenerationRequest, type NodeAllowance } from "../lib/node-generation";
 import styles from "./NodeManager.module.css";
 
 const MAX_BACKUP_BYTES = 16 * 1024;
@@ -22,6 +23,9 @@ const MAX_BACKUP_BYTES = 16 * 1024;
 type VaultAction = "idle" | "creating" | "restoring" | "exporting";
 
 export interface NodeManagerProps {
+  sessionIdentity: string;
+  proEnabled?: boolean;
+  financeEnabled?: boolean;
   onSessionChange?: (session: NodeSession | null) => void;
 }
 
@@ -48,9 +52,15 @@ function shortAddress(address: string) {
   return `${address.slice(0, 8)}…${address.slice(-6)}`;
 }
 
-export default function NodeManager({ onSessionChange }: NodeManagerProps) {
+export default function NodeManager({ onSessionChange, sessionIdentity, proEnabled = false, financeEnabled = false }: NodeManagerProps) {
   const [open, setOpen] = useState(false);
-  const [count, setCount] = useState(5);
+  const [count, setCount] = useState(proEnabled ? 5 : 1);
+  const [allowance, setAllowance] = useState<NodeAllowance | null>(null);
+  const [allowanceError, setAllowanceError] = useState("");
+  const [pending, setPending] = useState(false);
+  const attemptRef = useRef<{ requestId: string; count: number; session?: NodeSession } | null>(null);
+  const busyRef = useRef(false);
+  const identityValid = useRef(true);
   const [session, setSession] = useState<NodeSession | null>(null);
   const [vaultAction, setVaultAction] = useState<VaultAction>("idle");
   const [vaultProgress, setVaultProgress] = useState(0);
@@ -76,21 +86,46 @@ export default function NodeManager({ onSessionChange }: NodeManagerProps) {
     sessionRef.current = session;
   }, [session]);
 
-  useEffect(() => () => {
+  useEffect(() => {
+    identityValid.current = true;
+    return () => {
     vaultGeneration.current += 1;
     balanceGeneration.current += 1;
     if (sessionRef.current) forgetNodeSession(sessionRef.current);
+    attemptRef.current = null; identityValid.current = false;
+    };
   }, []);
 
   function lockWallets() {
     vaultGeneration.current += 1;
     balanceGeneration.current += 1;
+    attemptRef.current=null; setPending(false); busyRef.current=false;
     const current=sessionRef.current;
     sessionRef.current=null;
     if(current)forgetNodeSession(current);
     setSession(null);onSessionChange?.(null);setBalances(null);setVaultAction("idle");
     setVaultError("Wallets locked. Restore your encrypted backup to unlock them. Submitted transaction records remain available.");
   }
+  useEffect(() => {
+    const pagehide = () => lockWallets();
+    window.addEventListener("pagehide", pagehide);
+    return () => window.removeEventListener("pagehide", pagehide);
+  }, []);
+  function allowanceFailure(error: unknown) {
+    if (error instanceof GenerationError && ["SESSION_CHANGED", "SIGN_IN"].includes(error.code)) {
+      identityValid.current = false; lockWallets();
+    }
+    setAllowance(null); setAllowanceError(message(error));
+  }
+  useEffect(() => {
+    let active = true;
+    async function refresh() {
+      try { const result = await nodeGenerationRequest(sessionIdentity); if (active && identityValid.current) { setAllowance(result); setAllowanceError(""); } }
+      catch (error) { if (active) allowanceFailure(error); }
+    }
+    void refresh(); const timer = window.setInterval(refresh, 60000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [sessionIdentity]);
   useEffect(() => {
     if(!session)return;
     lastActivity.current=Date.now();
@@ -147,48 +182,54 @@ export default function NodeManager({ onSessionChange }: NodeManagerProps) {
   }
 
   async function handleCreate() {
+    if (busyRef.current || !identityValid.current) return;
     const passwordInput = createPasswordRef.current;
     const password = passwordInput?.value || "";
-    if (session && !replaceConfirmed) {
+    if (!attemptRef.current && sessionRef.current && !replaceConfirmed) {
       if (passwordInput) passwordInput.value = "";
-      setVaultError("Confirm that you understand the current in-memory wallets will be forgotten before replacing them.");
-      return;
+      setVaultError("Confirm replacement only after saving a recoverable backup."); return;
     }
     if (password.length < 12 || password.length > 128) {
       if (passwordInput) passwordInput.value = "";
-      setVaultError("Backup password must be 12–128 characters.");
-      return;
+      setVaultError("Backup password must be 12–128 characters."); return;
     }
+    if (!attemptRef.current && (!allowance?.available || count > allowance.maxCount)) {
+      if (passwordInput) passwordInput.value = "";
+      setVaultError("Your wallet allowance is not available. Check the reset time below."); return;
+    }
+    busyRef.current = true;
     const generation = ++vaultGeneration.current;
-    setVaultAction("creating");
-    setVaultProgress(0);
-    setVaultError("");
-    let next: NodeSession | null = null;
+    const current = () => generation === vaultGeneration.current && identityValid.current;
+    setVaultAction("creating"); setVaultProgress(0); setVaultError("");
     try {
-      next = createNodeSession(count);
-      const serialized = await encryptNodeBackup(next, password, (progress) => {
-        if (generation === vaultGeneration.current) setVaultProgress(progress * 100);
-      });
-      if (generation !== vaultGeneration.current) {
-        forgetNodeSession(next);
-        return;
+      if (!attemptRef.current) { attemptRef.current = { requestId: crypto.randomUUID(), count: proEnabled ? count : 1 }; setPending(true); }
+      const attempt = attemptRef.current;
+      if (!attempt.session) {
+        const reserved = await nodeGenerationRequest(sessionIdentity, attempt);
+        if (!current()) return;
+        // Store the root immediately: a failed encryption/download must retry these same keys.
+        attempt.session = createNodeSession(attempt.count);
+        replaceSession(attempt.session);
+        setAllowance(previous => previous ? { ...previous, available: reserved.nextEligibleAt === null, nextEligibleAt: reserved.nextEligibleAt } : null);
       }
-      download(serialized, `pons-node-backup-${next.id}.json`);
-      replaceSession(next);
-      next = null;
+      if (!current()) return;
+      const next = attempt.session;
+      const serialized = await encryptNodeBackup(next, password, progress => { if (current()) setVaultProgress(progress * 100); });
+      if (!current() || sessionRef.current !== next) return;
+      download(serialized, `hoodlabs-node-backup-${next.id}.json`);
     } catch (error) {
-      if (next) forgetNodeSession(next);
-      if (generation === vaultGeneration.current) setVaultError(message(error));
+      if (current()) {
+        if (error instanceof GenerationError && ["SESSION_CHANGED", "SIGN_IN"].includes(error.code)) allowanceFailure(error);
+        else setVaultError(message(error) + " Retry uses the same request and wallets. Do not close this tab before saving your backup.");
+      }
     } finally {
       if (passwordInput) passwordInput.value = "";
-      if (generation === vaultGeneration.current) {
-        setVaultAction("idle");
-        setVaultProgress(0);
-      }
+      if (current()) { busyRef.current = false; setVaultAction("idle"); setVaultProgress(0); }
     }
   }
 
   async function handleRestore() {
+    if (busyRef.current || !identityValid.current) return;
     const fileInput = restoreFileRef.current;
     const passwordInput = restorePasswordRef.current;
     const file = fileInput?.files?.[0];
@@ -210,6 +251,7 @@ export default function NodeManager({ onSessionChange }: NodeManagerProps) {
       return;
     }
     const generation = ++vaultGeneration.current;
+    busyRef.current = true;
     setVaultAction("restoring");
     setVaultProgress(0);
     setVaultError("");
@@ -229,6 +271,7 @@ export default function NodeManager({ onSessionChange }: NodeManagerProps) {
       if (current && !sameWallets && !replaceConfirmed) {
         throw new Error("This backup contains different wallets. Confirm replacement before restoring it.");
       }
+      attemptRef.current = null; setPending(false);
       replaceSession(restored);
       restored = null;
     } catch (error) {
@@ -238,13 +281,14 @@ export default function NodeManager({ onSessionChange }: NodeManagerProps) {
       if (passwordInput) passwordInput.value = "";
       if (fileInput) fileInput.value = "";
       if (generation === vaultGeneration.current) {
-        setVaultAction("idle");
+        busyRef.current = false; setVaultAction("idle");
         setVaultProgress(0);
       }
     }
   }
 
   async function handleKeystoreExport() {
+    if (busyRef.current || !identityValid.current) return;
     if (!session || !verified) return;
     const passwordInput = exportPasswordRef.current;
     const password = passwordInput?.value || "";
@@ -255,6 +299,7 @@ export default function NodeManager({ onSessionChange }: NodeManagerProps) {
     }
     const index = Number(selectedNodeRef.current?.value || 0);
     const generation = ++vaultGeneration.current;
+    busyRef.current = true;
     setVaultAction("exporting");
     setVaultProgress(0);
     setVaultError("");
@@ -269,7 +314,7 @@ export default function NodeManager({ onSessionChange }: NodeManagerProps) {
     } finally {
       if (passwordInput) passwordInput.value = "";
       if (generation === vaultGeneration.current) {
-        setVaultAction("idle");
+        busyRef.current = false; setVaultAction("idle");
         setVaultProgress(0);
       }
     }
@@ -285,7 +330,7 @@ export default function NodeManager({ onSessionChange }: NodeManagerProps) {
   }
 
   async function handleBalanceCheck() {
-    if (!session || !verified || !targetWei) return;
+    if (!financeEnabled || !session || !verified || !targetWei) return;
     const generation = ++balanceGeneration.current;
     const expectedSession = session;
     const expectedTarget = targetEth;
@@ -342,20 +387,22 @@ export default function NodeManager({ onSessionChange }: NodeManagerProps) {
   return (
     <section className={styles.manager} aria-labelledby="node-manager-title">
       <button className={styles.managerToggle} type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-controls="node-manager-panel">
-        <span><span className={styles.eyebrow}>Node wallets</span><strong id="node-manager-title">Prepare controlled funding wallets</strong><small>Encrypted local backup · manual funding · PONS balance checks</small></span>
+        <span><span className={styles.eyebrow}>Node wallets</span><strong id="node-manager-title">Prepare controlled funding wallets</strong><small>Encrypted local backup · backup verification · recovery controls</small></span>
         <span className={open ? styles.chevronOpen : styles.chevron} aria-hidden="true">⌄</span>
       </button>
 
       {session && <button className={styles.secondaryButton} type="button" onClick={lockWallets}>Lock wallets</button>}
       {open && <div id="node-manager-panel" className={styles.panel}>
-        {verified && session && <ExchangeFunding addresses={session.addresses} />}
+        {financeEnabled && verified && session && <ExchangeFunding addresses={session.addresses} />}
         <div className={styles.step}>
           <div className={styles.stepHeading}><span>1</span><div><h2>Create and verify wallets</h2><p>Keys stay in this tab, which remains a sensitive signing environment. Wallets lock after 15 minutes without activity. Download the encrypted backup, then restore it to prove you can recover the wallets.</p></div></div>
           {vaultError && <div className={styles.alert} role="alert"><span>{vaultError}</span><button type="button" onClick={() => setVaultError("")}>Dismiss</button></div>}
+          <p role="status">{proEnabled ? "Pro: create up to 50 wallets per attempt." : "Free: one wallet generation attempt per verified account every 24 hours."} {allowance?.nextEligibleAt && <>Next free wallet: {new Date(allowance.nextEligibleAt).toLocaleString()}.</>}</p>
+          {allowanceError && <p role="status">{allowanceError}</p>}
           <div className={styles.controls}>
-            <label><span>Wallet count</span><input type="number" min="1" max={MAX_NODES} value={count} onChange={(event) => setCount(Math.max(1, Math.min(MAX_NODES, Number(event.target.value) || 1)))} disabled={busy} /></label>
+            <label><span>Wallet count</span><input type="number" min="1" max={proEnabled ? MAX_NODES : 1} value={pending ? attemptRef.current?.count || count : count} onChange={(event) => setCount(Math.max(1, Math.min(MAX_NODES, Number(event.target.value) || 1)))} disabled={busy || !proEnabled || pending} /></label>
             <label><span>Backup password</span><input ref={createPasswordRef} type="password" minLength={12} maxLength={128} autoComplete="new-password" placeholder="12–128 characters" disabled={busy} /></label>
-            <button className={styles.primaryButton} type="button" onClick={handleCreate} disabled={busy}>{vaultAction === "creating" ? "Encrypting backup…" : session ? "Replace wallets" : "Generate wallets"}</button>
+            <button className={styles.primaryButton} type="button" onClick={handleCreate} disabled={busy || !identityValid.current || (!pending && !allowance?.available)}>{vaultAction === "creating" ? "Encrypting backup…" : pending ? "Retry backup / request" : session ? "Replace wallets" : "Generate wallet"}</button>
           </div>
           {session && <label className={styles.confirm}><input type="checkbox" checked={replaceConfirmed} onChange={(event) => setReplaceConfirmed(event.target.checked)} disabled={busy} /><span>I understand replacing these wallets forgets the current in-memory session. I have a recoverable encrypted backup.</span></label>}
           {busy && <div className={styles.progress} role="status" aria-live="polite"><span style={{ width: `${Math.max(2, Math.min(100, vaultProgress))}%` }} /> <small>{vaultAction === "restoring" ? "Restoring" : vaultAction === "exporting" ? "Exporting keystore" : "Encrypting backup"}{vaultProgress ? ` · ${Math.round(vaultProgress)}%` : "…"}</small></div>}
@@ -368,14 +415,16 @@ export default function NodeManager({ onSessionChange }: NodeManagerProps) {
           </div>
 
           {session && <div className={`${styles.sessionStatus} ${verified ? styles.verified : ""}`} role="status">
-            <span aria-hidden="true">{verified ? "✓" : "!"}</span><div><strong>{verified ? `${session.addresses.length} wallets verified` : `${session.addresses.length} wallets created; backup not yet verified`}</strong><small>{verified ? "Funding destinations are now available below." : "Addresses remain hidden until the encrypted backup is restored successfully."}</small></div>
+            <span aria-hidden="true">{verified ? "✓" : "!"}</span><div><strong>{verified ? `${session.addresses.length} wallets verified` : `${session.addresses.length} wallets created; backup not yet verified`}</strong><small>{verified ? "Wallet addresses and encrypted export are now available below." : "Addresses remain hidden until the encrypted backup is restored successfully."}</small></div>
           </div>}
         </div>
 
         <div className={`${styles.step} ${!verified ? styles.locked : ""}`} aria-disabled={!verified}>
-          <div className={styles.stepHeading}><span>2</span><div><h2>Fund and monitor wallets</h2><p>Send ETH to these wallets using your own wallet or exchange, then bridge Ethereum ETH to Robinhood Chain.</p></div></div>
+          <div className={styles.stepHeading}><span>2</span><div><h2>{financeEnabled ? "Fund and monitor wallets" : "Wallet addresses & recovery"}</h2><p>{financeEnabled ? "Send ETH using your wallet or exchange, then bridge to Robinhood Chain." : "Keep your encrypted backup offline. Funding and trading tools require Pro and live-tool availability."}</p></div></div>
           {!verified ? <p className={styles.lockMessage}>Verify the encrypted backup in step 1 to reveal funding destinations.</p> : session && <>
-            {session.addresses.map((address,index)=><div key={`${session.id}-${index}`}><strong>Node {index+1}</strong><code className={styles.fullAddress}>{address}</code><NodeBridge session={session} nodeIndex={index} /></div>)}
+            {session.addresses.map((address,index)=><div key={`${session.id}-${index}`}><strong>Node {index+1}</strong><code className={styles.fullAddress}>{address}</code>{financeEnabled && <NodeBridge session={session} nodeIndex={index} />}</div>)}
+            {!financeEnabled && <button className={styles.secondaryButton} onClick={copyAddresses} type="button">Copy addresses</button>}
+            {financeEnabled && <>
             <div className={styles.chainHeading}><strong>Robinhood Chain funding target</strong><small>This is separate from the Ethereum withdrawal amount above. Check here only after each wallet has bridged to chain ID 4663.</small></div>
             <div className={styles.fundingControls}>
               <label><span>Target per wallet (ETH)</span><input value={targetEth} maxLength={80} onChange={(event) => updateTarget(event.target.value)} inputMode="decimal" aria-invalid={!targetWei} /></label>
@@ -397,6 +446,7 @@ export default function NodeManager({ onSessionChange }: NodeManagerProps) {
             </div>
             {balances && <p className={styles.snapshot}>Canonical Robinhood Chain (4663) balance snapshot · block {balances.blockNumber.toLocaleString()} · {new Date(balances.checkedAt).toLocaleString()}. A matching balance does not prove which withdrawal or bridge funded it.</p>}
 
+            </>}
             <div className={styles.keystoreBox}>
               <div><strong>Export one wallet for external control</strong><small>Produces a standard encrypted keystore. Keep its password separate from the file.</small></div>
               <select ref={selectedNodeRef} aria-label="Node to export">{session.addresses.map((address, index) => <option value={index} key={address}>Node {index + 1} · {shortAddress(address)}</option>)}</select>
