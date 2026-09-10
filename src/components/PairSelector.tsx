@@ -15,6 +15,7 @@ export default function PairSelector({ pairToken = constants.AddressZero, onPair
   const native = pairToken === constants.AddressZero;
   const callback = useRef(onPairChange);
   const sequence = useRef(0);
+  const [attempt, setAttempt] = useState(0);
   const [result, setResult] = useState<{ input: string; asset?: PairAsset; error?: string } | null>(null);
   useEffect(() => { callback.current = onPairChange; }, [onPairChange]);
   useEffect(() => {
@@ -34,7 +35,7 @@ export default function PairSelector({ pairToken = constants.AddressZero, onPair
       });
     }, 400);
     return () => { clearTimeout(timer); sequence.current++; };
-  }, [pairToken, native]);
+  }, [pairToken, native, attempt]);
   const current = result?.input === pairToken ? result : null;
   const change = (value: string) => {
     sequence.current++;
@@ -53,7 +54,7 @@ export default function PairSelector({ pairToken = constants.AddressZero, onPair
       </label>
       <p id="pair-guidance">Enter a PONS-approved ERC-20 address. Custom pairs launch with zero developer buy. Buy separately on PONS; generated-node trading supports ETH pairs only. Launch fees and gas are paid in ETH.</p>
       <div id="pair-status" aria-live="polite" role="status">
-        {current?.error ? <p className={styles.error}>{current.error}</p> : current?.asset ? <dl className={styles.metadata}>
+        {current?.error ? <><p className={styles.error}>{current.error}</p><button className={styles.retry} type="button" onClick={() => { sequence.current++; setResult(null); setAttempt(value => value + 1); }}>Retry pair lookup</button></> : current?.asset ? <dl className={styles.metadata}>
           <dt>Approved quote asset</dt><dd>{current.asset.symbol}</dd>
           <dt>Canonical contract</dt><dd className={styles.address}>{current.asset.address}</dd>
           <dt>Decimals</dt><dd>{current.asset.decimals}</dd>

@@ -1,5 +1,5 @@
 import { ReactNode, ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { utils } from "ethers";
+import { constants, utils } from "ethers";
 import {
   connectWallet,
   getLaunchOperation,
@@ -17,12 +17,13 @@ import {
   switchToPons,
 } from "../lib/pons";
 import type { LaunchOperation } from "../lib/pons";
-import type { LaunchDraft, LaunchReceipt, PreparedLaunch, ProtocolState, WalletState } from "../lib/pons-types";
+import type { LaunchDraft, LaunchReceipt, PreparedLaunch, ProtocolState, WalletState, PairAsset } from "../lib/pons-types";
 import type { NodeSession } from "../lib/node-vault";
 import NodeManager from "./NodeManager";
 import NodeTrading from "./NodeTrading";
 import TokenLinks from "./TokenLinks";
 import LabHero from "./LabHero";
+import PairSelector from "./PairSelector";
 import styles from "./PonsLaunchpad.module.css";
 
 const PONS_CHAIN_ID = 4663;
@@ -113,6 +114,9 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
   const [walletBusy, setWalletBusy] = useState(false);
   const [walletError, setWalletError] = useState("");
   const [draft, setDraft] = useState<LaunchDraft>(EMPTY_DRAFT);
+  const [pairAsset, setPairAsset] = useState<PairAsset | null>(null);
+  const isCustomPair = draft.pairToken !== undefined && draft.pairToken !== constants.AddressZero;
+  const pairLabel = isCustomPair ? pairAsset?.symbol || "Custom asset" : "ETH";
   const [advanced, setAdvanced] = useState(false);
   const [exemptionText, setExemptionText] = useState("");
   const [imageState, setImageState] = useState<ImageState>("idle");
@@ -149,6 +153,12 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
   const updateDraft = useCallback(<K extends keyof LaunchDraft>(key: K, value: LaunchDraft[K]) => {
     invalidateReview();
     setDraft((current) => ({ ...current, [key]: value }));
+  }, [invalidateReview]);
+
+  const changePair = useCallback((pairToken: string, asset: PairAsset | null) => {
+    invalidateReview();
+    setPairAsset(asset);
+    setDraft(current => ({ ...current, pairToken, developerBuyEth: pairToken === constants.AddressZero ? current.developerBuyEth : "0" }));
   }, [invalidateReview]);
 
   const loadProtocol = useCallback(async () => {
@@ -222,11 +232,11 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
     setSubmitError("");
     setSubmitState("idle");
     window.requestAnimationFrame(() => {
-      const trading = document.getElementById("node-trading");
+      const trading = document.getElementById(receipt?.pairToken ? "custom-pair-trading" : "node-trading");
       trading?.focus();
       trading?.scrollIntoView({ block: "start" });
     });
-  }, []);
+  }, [receipt?.pairToken]);
 
   const handleModalKeyDown = useCallback((event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key === "Escape" && (submitState === "review" || submitState === "success")) {
@@ -268,6 +278,8 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
     if (!draft.logo) return imageState === "uploading" ? "Wait for the image upload to finish." : "Provide a token image URI.";
     try {validateImageUri(draft.logo);}catch(error){return errorMessage(error);}
     if (!selectedConfig?.enabled) return "Choose an available launch configuration.";
+    if (isCustomPair && (!utils.isAddress(draft.pairToken?.trim() || "") || !pairAsset || pairAsset.address.toLowerCase() !== draft.pairToken?.trim().toLowerCase())) return "Check an approved quote asset before reviewing the launch.";
+    if (isCustomPair && Number(draft.developerBuyEth) !== 0) return "Custom pair launches require zero developer buy.";
     if (!/^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/.test(draft.developerBuyEth)) return "Developer buy must be a non-negative ETH amount with up to 18 decimals.";
     if (draft.creatorFeeRecipient && !utils.isAddress(draft.creatorFeeRecipient)) return "Enter a valid fee recipient address.";
     if (draft.creatorTaxBps < 0 || draft.creatorTaxBps > (protocol?.maxCreatorTaxBps ?? 0)) return `Creator tax must be between 0 and ${(protocol?.maxCreatorTaxBps ?? 0) / 100}%.`;
@@ -279,7 +291,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
       if (value && !/^https:\/\//i.test(value)) return `${label} must start with https://.`;
     }
     return "";
-  }, [draft, exemptions, imageState, protocol, selectedConfig]);
+  }, [draft, exemptions, imageState, protocol, selectedConfig, isCustomPair, pairAsset]);
 
   const uploadImage = useCallback(async (file: File) => {
     if(!proEnabled)return;
@@ -496,14 +508,15 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
 
           <label className={styles.field}><span>Website <small>optional</small></span><input type="url" value={draft.website} onChange={(event) => updateDraft("website", event.target.value)} placeholder="https://your-token.com" autoComplete="url" /><small>Your token’s official website, included in its PONS launch details.</small></label>
 
-          <label id="pair-research" className={styles.field}><span>Launch configuration</span><span className={styles.selectWrap}><select value={draft.configId} onChange={(event) => updateDraft("configId", event.target.value)} disabled={protocolLoading || !protocol}><option value="">{protocolLoading ? "Loading live configurations…" : "Choose configuration"}</option>{protocol?.configs.filter((config) => config.enabled).map((config) => <option key={config.id} value={config.id}>{config.id} · ETH pair</option>)}</select><Icon name="chevron" /></span>{protocol && !protocolLoading && !protocol.configs.some((config) => config.enabled) && <small role="status">No launch configurations are currently enabled.</small>}</label>
+          <div id="pair-research"><PairSelector pairToken={draft.pairToken} onPairChange={changePair} disabled={formBusy} /></div>
+          <label className={styles.field}><span>Launch configuration</span><span className={styles.selectWrap}><select value={draft.configId} onChange={(event) => updateDraft("configId", event.target.value)} disabled={protocolLoading || !protocol}><option value="">{protocolLoading ? "Loading live configurations…" : "Choose configuration"}</option>{protocol?.configs.filter((config) => config.enabled).map((config) => <option key={config.id} value={config.id}>{config.id} · {pairLabel} pair</option>)}</select><Icon name="chevron" /></span>{protocol && !protocolLoading && !protocol.configs.some((config) => config.enabled) && <small role="status">No launch configurations are currently enabled.</small>}</label>
           <dl className={styles.configDetails} aria-label="Selected launch configuration terms">
             <div><dt>Total supply</dt><dd>{formatTokenSupply(selectedConfig?.supplyWei)}</dd></div>
             <div><dt>Pool fee</dt><dd>{formatPoolFee(selectedConfig?.poolFee)}</dd></div>
             <div><dt>Liquidity</dt><dd>{selectedConfig ? "Permanent at graduation" : "—"}</dd></div>
           </dl>
 
-          <label className={styles.field}><span>Developer buy <small>optional · ETH only</small></span><div className={styles.amountField}><input inputMode="decimal" value={draft.developerBuyEth} onChange={(event) => updateDraft("developerBuyEth", event.target.value)} aria-label="Developer buy in ETH" /><strong>ETH</strong></div><small>Bought in the launch transaction. Network gas is additional.</small></label>
+          <label className={styles.field}><span>Developer buy <small>optional · ETH only</small></span><div className={styles.amountField}><input inputMode="decimal" disabled={isCustomPair} value={draft.developerBuyEth} onChange={(event) => updateDraft("developerBuyEth", event.target.value)} aria-label="Developer buy in ETH" /><strong>ETH</strong></div><small>{isCustomPair ? "Zero for custom quote assets. After launch, use PONS to buy with the selected asset; ETH still pays gas." : "Bought in the launch transaction. Network gas is additional."}</small></label>
 
           <div className={styles.advancedBlock}>
             <button className={styles.advancedToggle} type="button" onClick={() => setAdvanced((value) => !value)} aria-expanded={advanced}><span>Advanced</span><span className={advanced ? styles.chevronOpen : ""}><Icon name="chevron" /></span></button>
@@ -526,7 +539,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
             {validationError && wallet && !wrongChain && <p className={styles.validationHint}>{validationError}</p>}
             {submitState === "error" && <div className={styles.alert} role="alert"><span>{submitError}</span><button type="button" onClick={handlePrepare}>Retry</button></div>}
             {submitState === "unknown" && <div className={styles.pendingNotice} role="status"><strong>Launch status is unresolved.</strong><button type="button" onClick={recheckLaunch} disabled={recoveryBusy}>{recoveryBusy?"Checking chain…":"Recheck launch status"}</button><button type="button" onClick={downloadRecovery} disabled={!storedOperation}>Export recovery record</button>{submitError && <span role="alert">{submitError}</span>}<span>Do not resubmit. Check your wallet{txHash ? " or the explorer" : " activity"} before taking any action.</span>{txHash && <><code>{txHash}</code><a href={`${PONS_EXPLORER}/tx/${txHash}`} target="_blank" rel="noreferrer">Check transaction <Icon name="external" /></a></>}</div>}
-            <div className={styles.feeLine}><span>ETH pair · live protocol fee</span><strong>{protocolLoading ? "Loading…" : `${formatEth(protocol?.launchFeeWei)} ETH`}</strong></div>
+            <div className={styles.feeLine}><span>{pairLabel} pair · launch fee in ETH</span><strong>{protocolLoading ? "Loading…" : `${formatEth(protocol?.launchFeeWei)} ETH`}</strong></div>
             <button ref={reviewButtonRef} className={styles.primaryButton} type="button" onClick={mainAction.action} disabled={mainAction.disabled}>{mainAction.label}</button>
           </div>
         </div>
@@ -539,12 +552,13 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
             {draft.description && <p className={styles.previewDescription}>{draft.description}</p>}
             <dl className={styles.terms}>
               <div><dt>Launch fee</dt><dd>{protocolLoading ? "Loading…" : `${formatEth(protocol?.launchFeeWei)} ETH`}</dd></div>
-              <div><dt>Paired with</dt><dd>ETH</dd></div>
+              <div><dt>Paired with</dt><dd>{pairLabel}</dd></div>
+              {isCustomPair && pairAsset && <div><dt>Quote contract</dt><dd title={pairAsset.address}>{shorten(pairAsset.address)}</dd></div>}
               <div><dt>Trade fee</dt><dd>{selectedConfig ? `${(selectedConfig.curveFeeBps / 100).toFixed(2)}%` : "—"}</dd></div>
               <div><dt>Total supply</dt><dd>{formatTokenSupply(selectedConfig?.supplyWei)}</dd></div>
               <div><dt>Pool fee</dt><dd>{formatPoolFee(selectedConfig?.poolFee)}</dd></div>
               {protocol?.snipeTaxBps !== undefined && <div><dt>Launch protection</dt><dd>{(protocol.snipeTaxBps / 100).toFixed(2)}% · {protocol.snipeWindowSeconds ?? 0}s</dd></div>}
-              <div><dt>Graduation</dt><dd>{selectedConfig ? `${formatEth(selectedConfig.graduationThresholdWei)} ETH` : "—"}</dd></div>
+              <div><dt>Graduation</dt><dd>{isCustomPair ? pairAsset ? `${utils.formatUnits(pairAsset.graduationThresholdWei, pairAsset.decimals)} ${pairAsset.symbol}` : "—" : selectedConfig ? `${formatEth(selectedConfig.graduationThresholdWei)} ETH` : "—"}</dd></div>
               <div><dt>Liquidity</dt><dd>{selectedConfig ? "Permanent at graduation" : "—"}</dd></div>
             </dl>
             <div className={styles.trustNote}><span className={wallet?.canLaunch ? styles.goodDot : styles.neutralDot} /><p><strong>{wallet?.canLaunch ? "Wallet eligible" : "Eligibility checked on connect"}</strong><small>Audit status is not asserted by this interface. Verify deployed protocol addresses before launch.</small></p></div>
@@ -553,7 +567,11 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
       </section>
 
       {receipt && <TokenLinks address={receipt.tokenAddress} />}
-      {proEnabled && launchEnabled && <NodeTrading session={nodeSession} launchedTokenAddress={receipt?.tokenAddress || ""} />}
+      {receipt?.pairToken && <section id="custom-pair-trading" className={styles.pendingNotice} tabIndex={-1} aria-label="Custom pair trading">
+        <strong>Your custom pair is ready on PONS.</strong><span>Quote asset: {receipt.pairToken}. Generated-node trading here supports native ETH pairs. Use PONS for this token’s buys and sells; keep Robinhood ETH for gas.</span>
+        <a href={`https://www.ponsfamily.com/launchpad/${receipt.tokenAddress}`} target="_blank" rel="noopener noreferrer">Open this token on PONS →</a>
+      </section>}
+      {proEnabled && launchEnabled && <NodeTrading session={nodeSession} launchedTokenAddress={receipt?.pairToken ? "" : receipt?.tokenAddress || ""} />}
       <div id="token-lab" className={styles.integrationSlot} data-integration="token-lab" aria-hidden="true" />
       {proPanel}
 
@@ -565,9 +583,11 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
             <div><dt>Network</dt><dd>PONS Mainnet · 4663</dd></div>
             <div><dt>Account</dt><dd title={prepared.account}>{shorten(prepared.account, 10, 8)}</dd></div>
             <div><dt>Token</dt><dd>{prepared.name} · ${prepared.symbol}</dd></div>
+            <div><dt>Quote asset</dt><dd>{prepared.pair ? `${prepared.pair.symbol} · ${prepared.pair.address}` : "Native ETH"}</dd></div>
+            {prepared.pair && <div><dt>Quote decimals</dt><dd>{prepared.pair.decimals}</dd></div>}
             <div><dt>Fee recipient</dt><dd title={prepared.creatorFeeRecipient}>{shorten(prepared.creatorFeeRecipient, 10, 8)}</dd></div>
             <div><dt>Launch fee</dt><dd>{formatEth(prepared.launchFeeWei)} ETH</dd></div>
-            <div><dt>Developer buy</dt><dd>{formatEth(prepared.developerBuyWei)} ETH</dd></div>
+            <div><dt>Developer buy</dt><dd>{prepared.pair ? "None · buy separately on PONS" : `${formatEth(prepared.developerBuyWei)} ETH`}</dd></div>
             <div><dt>Total value</dt><dd>{formatEth(prepared.totalValueWei)} ETH</dd></div>
             <div><dt>Estimated gas</dt><dd>{formatEth(prepared.estimatedGasWei)} ETH</dd></div>
             <div><dt>Minimum tokens out</dt><dd>{prepared.minTokensOut}</dd></div>
@@ -579,7 +599,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
 
       {["submitting", "pending"].includes(submitState) && <div className={styles.modalBackdrop}><section ref={modalRef} className={`${styles.modal} ${styles.statusModal}`} role="status" aria-live="polite" tabIndex={-1} onKeyDown={handleModalKeyDown}><span className={styles.largeSpinner}><Icon name="spinner" /></span><h2>{submitState === "submitting" ? "Confirm in wallet" : "Launch pending"}</h2><p>{submitState === "submitting" ? "Review and approve the launch transaction in your wallet." : "Your transaction was submitted. Keep this page open while it confirms."}</p>{txHash && <code>{txHash}</code>}</section></div>}
 
-      {receipt && submitState === "success" && <div className={styles.modalBackdrop} onMouseDown={(event) => { if (event.target === event.currentTarget) continueToNodeTrading(); }}><section ref={modalRef} className={`${styles.modal} ${styles.statusModal}`} role="dialog" aria-modal="true" aria-labelledby="success-title" tabIndex={-1} onKeyDown={handleModalKeyDown}><span className={styles.successIcon}><Icon name="check" /></span><p className={styles.eyebrow}>Verified onchain</p><h2 id="success-title">Token launched</h2><TokenLinks address={receipt.tokenAddress} /><p>Your token and bonding curve are live on PONS Mainnet.</p><dl className={styles.reviewList}><div><dt>Token</dt><dd><a href={`${PONS_EXPLORER}/address/${receipt.tokenAddress}`} target="_blank" rel="noreferrer">{shorten(receipt.tokenAddress, 10, 8)} <Icon name="external" /></a></dd></div><div><dt>Curve</dt><dd><a href={`${PONS_EXPLORER}/address/${receipt.curveAddress}`} target="_blank" rel="noreferrer">{shorten(receipt.curveAddress, 10, 8)} <Icon name="external" /></a></dd></div><div><dt>Transaction</dt><dd>{shorten(receipt.transactionHash, 10, 8)}</dd></div></dl><div className={styles.modalActions}><button className={styles.primaryButton} type="button" onClick={continueToNodeTrading}>Continue to node trading</button><a className={styles.secondaryButton} href={receipt.explorerUrl} target="_blank" rel="noreferrer">View verified transaction <Icon name="external" /></a></div></section></div>}
+      {receipt && submitState === "success" && <div className={styles.modalBackdrop} onMouseDown={(event) => { if (event.target === event.currentTarget) continueToNodeTrading(); }}><section ref={modalRef} className={`${styles.modal} ${styles.statusModal}`} role="dialog" aria-modal="true" aria-labelledby="success-title" tabIndex={-1} onKeyDown={handleModalKeyDown}><span className={styles.successIcon}><Icon name="check" /></span><p className={styles.eyebrow}>Verified onchain</p><h2 id="success-title">Token launched</h2><TokenLinks address={receipt.tokenAddress} /><p>Your token and bonding curve are live on PONS Mainnet.</p><dl className={styles.reviewList}><div><dt>Token</dt><dd><a href={`${PONS_EXPLORER}/address/${receipt.tokenAddress}`} target="_blank" rel="noreferrer">{shorten(receipt.tokenAddress, 10, 8)} <Icon name="external" /></a></dd></div><div><dt>Curve</dt><dd><a href={`${PONS_EXPLORER}/address/${receipt.curveAddress}`} target="_blank" rel="noreferrer">{shorten(receipt.curveAddress, 10, 8)} <Icon name="external" /></a></dd></div><div><dt>Transaction</dt><dd>{shorten(receipt.transactionHash, 10, 8)}</dd></div></dl><div className={styles.modalActions}><button className={styles.primaryButton} type="button" onClick={continueToNodeTrading}>{receipt.pairToken ? "Close launch receipt" : "Continue to node trading"}</button><a className={styles.secondaryButton} href={receipt.explorerUrl} target="_blank" rel="noreferrer">View verified transaction <Icon name="external" /></a></div></section></div>}
     </main>
   );
 }
