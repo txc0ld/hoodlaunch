@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import styles from './ProAccess.module.css';
 type Access = { configured: boolean; signedIn: boolean; pro: boolean; billing: boolean };
 const NONE: Access = { configured: false, signedIn: false, pro: false, billing: false };
-export default function ProAccess({ onAccessChange }: { onAccessChange: (value: boolean) => void }) {
+export default function ProAccess({ onAccessChange, salesEnabled = false }: { onAccessChange: (value: boolean) => void; salesEnabled?: boolean }) {
   const [access, setAccess] = useState<Access>(NONE);
   const [email, setEmail] = useState(''); const [code, setCode] = useState('');
   const [sent, setSent] = useState(false); const [busy, setBusy] = useState(false); const [message, setMessage] = useState('Checking account services…');
@@ -37,7 +37,7 @@ export default function ProAccess({ onAccessChange }: { onAccessChange: (value: 
     finally { setBusy(false); }
   }
   return <section className={styles.panel} aria-labelledby="pro-title">
-    <div><p className={styles.label}>HOODLAUNCH PRO</p><h2 id="pro-title">One launch. Up to 50 wallets.</h2><p>Free token launching. Pro adds the guided wallet workspace and managed image uploads.</p></div>
+    <div><p className={styles.label}>HOODLABS PRO</p><h2 id="pro-title">One launch. Up to 50 wallets.</h2><p>Free token launching. Pro adds the guided wallet workspace and managed image uploads.</p></div>
     {access.pro ? <p className={styles.active}>Pro active · 50 upload attempts per day</p> : <p className={styles.note}>Your wallet keys stay in this browser. Account services never receive your seed phrase, backup password or exchange credentials. Network and protocol fees still apply.</p>}
     {access.configured && !access.signedIn && <form onSubmit={event => { event.preventDefault(); void act(sent ? 'verify-code' : 'request-code'); }} className={styles.controls}>
       <label>Email<input type="email" autoComplete="email" value={email} onChange={event => { setEmail(event.target.value); setSent(false); }} required maxLength={254} disabled={busy} /></label>
@@ -45,10 +45,11 @@ export default function ProAccess({ onAccessChange }: { onAccessChange: (value: 
       <button disabled={busy}>{busy ? 'Working…' : sent ? 'Sign in' : 'Email me a code'}</button>
     </form>}
     {access.signedIn && <div className={styles.controls}>
-      <button disabled={busy || !access.billing} onClick={() => void act(access.pro ? 'portal' : 'checkout')}>{access.pro ? 'Manage subscription' : access.billing ? 'See Pro price & subscribe' : 'Pro subscriptions coming soon'}</button>
+      <button disabled={busy || !access.billing || (!access.pro && !salesEnabled)} onClick={() => void act(access.pro ? 'portal' : 'checkout')}>{access.pro ? 'Manage subscription' : access.billing && salesEnabled ? 'See Pro price & subscribe' : 'Pro subscriptions coming soon'}</button>
+      <button disabled={busy || !access.billing} onClick={() => void act('portal')}>Manage billing</button>
       <button disabled={busy} onClick={() => void act('logout')}>Sign out & lock wallets</button>
     </div>}
     {message && <p role="status">{message}</p>}
-    <p className={styles.note}>Images uploaded to IPFS are public and may remain available permanently. Keep recovery backups offline. <a href="/security">Security & recovery</a></p>
+    <p className={styles.note}>Images uploaded to IPFS are public and may remain available permanently. Keep recovery backups offline. <a href="/security" target="_blank" rel="noopener noreferrer">Security & recovery</a></p>
   </section>;
 }

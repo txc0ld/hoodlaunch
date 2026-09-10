@@ -1,5 +1,5 @@
 module.exports = {
-  reactStrictMode: true, poweredByHeader: false, productionBrowserSourceMaps: false,
+  outputFileTracingRoot: __dirname, reactStrictMode: true, poweredByHeader: false, productionBrowserSourceMaps: false,
   async headers() { return [{ source: '/:path*', headers: [
     { key: 'X-Content-Type-Options', value: 'nosniff' },
     { key: 'X-Frame-Options', value: 'DENY' },

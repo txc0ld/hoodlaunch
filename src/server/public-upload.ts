@@ -1,4 +1,5 @@
 import sharp from 'sharp';
+import { isValidCid } from './public-cid';
 import { fail } from './public-security';
 export const IMAGE_LIMIT = 4 * 1024 * 1024;
 export async function sanitizeImage(bytes: Buffer, mime: string) {
@@ -16,11 +17,14 @@ export async function uploadPublicImage(bytes: Buffer) {
   const form = new FormData(); form.append('network', 'public'); form.append('file', new Blob([new Uint8Array(bytes)], { type: 'image/webp' }), 'token.webp');
   const response = await fetch('https://uploads.pinata.cloud/v3/files', { method: 'POST', headers: { Authorization: `Bearer ${process.env.PINATA_JWT}` }, body: form, signal: AbortSignal.timeout(15000), redirect: 'error' });
   if (!response.ok) fail(502, 'UPLOAD_FAILED', 'Image storage is unavailable. Try again later.');
-  const text = await response.text();
-  if (text.length > 32768) fail(502, 'UPLOAD_FAILED', 'Invalid image storage response.');
+  const reader = response.body?.getReader();
+  if (!reader) fail(502, 'UPLOAD_FAILED', 'Invalid image storage response.');
+  const chunks: Uint8Array[] = []; let size = 0;
+  for (;;) { const part = await reader.read(); if (part.done) break; size += part.value.length; if (size > 32768) { await reader.cancel(); fail(502, 'UPLOAD_FAILED', 'Invalid image storage response.'); } chunks.push(part.value); }
+  const text = Buffer.concat(chunks).toString('utf8');
   let result: { data?: { cid?: string } };
   try { result = JSON.parse(text); } catch { return fail(502, 'UPLOAD_FAILED', 'Invalid image storage response.'); }
   const cid = result.data?.cid;
-  if (typeof cid !== 'string' || !/^(Qm[1-9A-HJ-NP-Za-km-z]{44}|bafy[a-z2-7]{20,120})$/.test(cid)) fail(502, 'UPLOAD_FAILED', 'Invalid image storage response.');
+  if (!isValidCid(cid)) fail(502, 'UPLOAD_FAILED', 'Invalid image storage response.');
   return { uri: `ipfs://${cid}`, cid };
 }

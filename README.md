@@ -1,4 +1,4 @@
-# Hoodlaunch
+# HOODLABS
 
 Free PONS launching with an external wallet, plus a paid Pro workspace for up to 50 generated wallets and managed image uploads. Target: **launch.hoodrich.rip**. Keep **www.hoodrich.rip** and its existing Vercel application intact.
 

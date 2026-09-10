@@ -21,6 +21,7 @@ import type { LaunchDraft, LaunchReceipt, PreparedLaunch, ProtocolState, WalletS
 import type { NodeSession } from "../lib/node-vault";
 import NodeManager from "./NodeManager";
 import NodeTrading from "./NodeTrading";
+import TokenLinks from "./TokenLinks";
 import styles from "./PonsLaunchpad.module.css";
 
 const PONS_CHAIN_ID = 4663;
@@ -433,7 +434,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
   return (
     <main className={styles.page}>
       <nav className={styles.nav} aria-label="Primary navigation">
-        <a className={styles.brand} href="https://launch.hoodrich.rip" target="_blank" rel="noreferrer" aria-label="Open Hoodlaunch website"><span className={styles.brandMark}>H</span><span>Hoodlaunch</span></a>
+        <a className={styles.brand} href="https://launch.hoodrich.rip" target="_blank" rel="noreferrer" aria-label="Open HOODLABS website"><span className={styles.brandMark}>H</span><span>HOODLABS</span></a>
         <div className={styles.navCenter}><span className={styles.product}>PONS V2</span><span className={styles.networkDot} /> Mainnet</div>
         {wallet ? (
           <button className={styles.walletButton} type="button" onClick={wrongChain ? handleSwitch : undefined} disabled={walletBusy}>
@@ -442,6 +443,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
         ) : <button className={styles.walletButton} type="button" onClick={handleConnect} disabled={walletBusy}><Icon name="wallet" />{walletBusy ? "Connecting…" : "Connect"}</button>}
       </nav>
 
+      <nav aria-label="HOODLABS help" style={{display:"flex",gap:24,flexWrap:"wrap",maxWidth:1180,margin:"12px auto",padding:"0 24px",fontSize:14}}><a href="/guide" target="_blank" rel="noopener noreferrer">How to guide</a><a href="/pro" target="_blank" rel="noopener noreferrer">Why Pro?</a><a href="/exchanges" target="_blank" rel="noopener noreferrer">Exchange funding</a><a href="/security" target="_blank" rel="noopener noreferrer">Security & recovery</a></nav>
       {proPanel}
       {!launchEnabled && <p className={styles.pendingNotice} role="status">Launch preview — live launching is not enabled yet.</p>}
       {proEnabled && launchEnabled && <NodeManager onSessionChange={setNodeSession} />}
@@ -548,6 +550,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
         </aside>
       </section>
 
+      {receipt && <TokenLinks address={receipt.tokenAddress} />}
       {proEnabled && launchEnabled && <NodeTrading session={nodeSession} launchedTokenAddress={receipt?.tokenAddress || ""} />}
 
       {prepared && submitState === "review" && <div className={styles.modalBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) invalidateReview(); }}>
@@ -572,7 +575,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
 
       {["submitting", "pending"].includes(submitState) && <div className={styles.modalBackdrop}><section ref={modalRef} className={`${styles.modal} ${styles.statusModal}`} role="status" aria-live="polite" tabIndex={-1} onKeyDown={handleModalKeyDown}><span className={styles.largeSpinner}><Icon name="spinner" /></span><h2>{submitState === "submitting" ? "Confirm in wallet" : "Launch pending"}</h2><p>{submitState === "submitting" ? "Review and approve the launch transaction in your wallet." : "Your transaction was submitted. Keep this page open while it confirms."}</p>{txHash && <code>{txHash}</code>}</section></div>}
 
-      {receipt && submitState === "success" && <div className={styles.modalBackdrop} onMouseDown={(event) => { if (event.target === event.currentTarget) continueToNodeTrading(); }}><section ref={modalRef} className={`${styles.modal} ${styles.statusModal}`} role="dialog" aria-modal="true" aria-labelledby="success-title" tabIndex={-1} onKeyDown={handleModalKeyDown}><span className={styles.successIcon}><Icon name="check" /></span><p className={styles.eyebrow}>Verified onchain</p><h2 id="success-title">Token launched</h2><p>Your token and bonding curve are live on PONS Mainnet.</p><dl className={styles.reviewList}><div><dt>Token</dt><dd><a href={`${PONS_EXPLORER}/address/${receipt.tokenAddress}`} target="_blank" rel="noreferrer">{shorten(receipt.tokenAddress, 10, 8)} <Icon name="external" /></a></dd></div><div><dt>Curve</dt><dd><a href={`${PONS_EXPLORER}/address/${receipt.curveAddress}`} target="_blank" rel="noreferrer">{shorten(receipt.curveAddress, 10, 8)} <Icon name="external" /></a></dd></div><div><dt>Transaction</dt><dd>{shorten(receipt.transactionHash, 10, 8)}</dd></div></dl><div className={styles.modalActions}><button className={styles.primaryButton} type="button" onClick={continueToNodeTrading}>Continue to node trading</button><a className={styles.secondaryButton} href={receipt.explorerUrl} target="_blank" rel="noreferrer">View verified transaction <Icon name="external" /></a></div></section></div>}
+      {receipt && submitState === "success" && <div className={styles.modalBackdrop} onMouseDown={(event) => { if (event.target === event.currentTarget) continueToNodeTrading(); }}><section ref={modalRef} className={`${styles.modal} ${styles.statusModal}`} role="dialog" aria-modal="true" aria-labelledby="success-title" tabIndex={-1} onKeyDown={handleModalKeyDown}><span className={styles.successIcon}><Icon name="check" /></span><p className={styles.eyebrow}>Verified onchain</p><h2 id="success-title">Token launched</h2><TokenLinks address={receipt.tokenAddress} /><p>Your token and bonding curve are live on PONS Mainnet.</p><dl className={styles.reviewList}><div><dt>Token</dt><dd><a href={`${PONS_EXPLORER}/address/${receipt.tokenAddress}`} target="_blank" rel="noreferrer">{shorten(receipt.tokenAddress, 10, 8)} <Icon name="external" /></a></dd></div><div><dt>Curve</dt><dd><a href={`${PONS_EXPLORER}/address/${receipt.curveAddress}`} target="_blank" rel="noreferrer">{shorten(receipt.curveAddress, 10, 8)} <Icon name="external" /></a></dd></div><div><dt>Transaction</dt><dd>{shorten(receipt.transactionHash, 10, 8)}</dd></div></dl><div className={styles.modalActions}><button className={styles.primaryButton} type="button" onClick={continueToNodeTrading}>Continue to node trading</button><a className={styles.secondaryButton} href={receipt.explorerUrl} target="_blank" rel="noreferrer">View verified transaction <Icon name="external" /></a></div></section></div>}
     </main>
   );
 }

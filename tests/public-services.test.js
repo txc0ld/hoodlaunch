@@ -70,3 +70,15 @@ test('real raster decoder rejects disguised bytes and strips metadata',async()=>
  const webp=await upload.sanitizeImage(png,'image/png');const info=await sharp(webp).metadata();assert.equal(info.format,'webp');assert.equal(info.exif,undefined);
  await assert.rejects(upload.sanitizeImage(png,'image/jpeg'));
 });
+
+test('CID validator checks structural version/hash/digest length',()=>{
+ const {isValidCid}=load('src/server/public-cid.ts');
+ assert.equal(isValidCid('bafyaaaaaaaaaaaaaaaaaaaa'),false);
+ assert.equal(isValidCid('QmYwAPJzv5CZsnAzt8auVZRnGiRA1PzKYw2JRUSpxD6aTv'),true);
+ assert.equal(isValidCid('bafy'+ 'a'.repeat(200)),false);
+});
+
+test('checkout cannot charge while live tools are disabled',async()=>{
+ const before=process.env.LIVE_LAUNCH_ENABLED;delete process.env.LIVE_LAUNCH_ENABLED;let calls=0;
+ try{const res=response();await accountRoute({account:async()=>{calls++;return 'user';}})(request({action:'checkout'}),res);assert.equal(res.code,503);assert.equal(calls,0);}finally{if(before!==undefined)process.env.LIVE_LAUNCH_ENABLED=before;}
+});

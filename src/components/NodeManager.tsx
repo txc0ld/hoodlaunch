@@ -14,6 +14,7 @@ import type { NodeSession } from "../lib/node-vault";
 import { getNodeBalances } from "../lib/node-balances";
 import type { NodeBalanceSnapshot } from "../lib/node-balances";
 import NodeBridge from "./NodeBridge";
+import ExchangeFunding from "./ExchangeFunding";
 import styles from "./NodeManager.module.css";
 
 const MAX_BACKUP_BYTES = 16 * 1024;
@@ -347,6 +348,7 @@ export default function NodeManager({ onSessionChange }: NodeManagerProps) {
 
       {session && <button className={styles.secondaryButton} type="button" onClick={lockWallets}>Lock wallets</button>}
       {open && <div id="node-manager-panel" className={styles.panel}>
+        {verified && session && <ExchangeFunding addresses={session.addresses} />}
         <div className={styles.step}>
           <div className={styles.stepHeading}><span>1</span><div><h2>Create and verify wallets</h2><p>Keys stay in this tab, which remains a sensitive signing environment. Wallets lock after 15 minutes without activity. Download the encrypted backup, then restore it to prove you can recover the wallets.</p></div></div>
           {vaultError && <div className={styles.alert} role="alert"><span>{vaultError}</span><button type="button" onClick={() => setVaultError("")}>Dismiss</button></div>}

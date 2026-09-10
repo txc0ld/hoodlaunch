@@ -39,6 +39,7 @@ export default safeHandler(async (req, res) => {
     sessionCookie(res, '', true); res.json({ signedIn: false }); return;
   }
   if (action === 'checkout' || action === 'portal') {
+    if (action === 'checkout' && process.env.LIVE_LAUNCH_ENABLED !== 'true') fail(503, 'BILLING_SETUP', 'Pro subscriptions are not on sale while live tools are disabled.');
     const id = (await account(req))!;
     await takeQuota(`billing:${id}`, 10, 3600);
     const stripe = stripeClient();
