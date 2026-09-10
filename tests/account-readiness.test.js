@@ -86,8 +86,9 @@ const baseServices = {
   takeQuota: async () => {},
 };
 
-function accountRoute(services = {}, checkout = {}) {
+function accountRoute(services = {}, checkout = {}, clock = require('node:perf_hooks').performance) {
   return load('pages/api/account.ts', {
+    'node:perf_hooks': { performance: clock },
     '../../src/server/public-services': { ...baseServices, ...services },
     '../../src/server/public-security': security,
     '../../src/server/public-checkout': {
@@ -459,4 +460,50 @@ test('portal still refuses an authenticated account without a Stripe customer', 
   assert.equal(res.code, 400);
   assert.equal(res.body.code, 'NO_BILLING');
   assert.equal(portalCalls, 0);
+});
+
+
+test('optional billing metadata uses remaining route time without changing verified Pro', async () => {
+  for (const [elapsed, expected] of [[13000, 4000], [17000, 0], [22000, 0]]) {
+    let now = 100;
+    let observedBudget;
+    const route = accountRoute({
+      account: async () => { now += 7000; return 'existing-user'; },
+      takeQuota: async () => { now += elapsed - 7000; },
+      getProStatus: async () => ({ ...baseStatus, pro: true, holder: { ...holder, granted: true } }),
+      getBillingAccountStatus: async (_id, budget) => {
+        observedBudget = budget;
+        return { billingAccount: false, billingAccountUnavailable: true };
+      },
+    }, {}, { now: () => now });
+    const res = response();
+    await route(request({ action: 'status' }, { cookie: `${security.cookieName()}=${'e'.repeat(64)}` }), res);
+    assert.equal(observedBudget, expected);
+    assert.equal(res.body.pro, true);
+    assert.equal(res.body.holder.granted, true);
+    assert.equal(res.body.billingAccountUnavailable, true);
+  }
+});
+
+test('billing metadata caps optional budgets and skips lookup when time is exhausted or invalid', async () => {
+  for (const budget of [0, -1, NaN, Infinity, -Infinity]) {
+    let operations = 0;
+    const services = load('src/server/public-services.ts', {
+      '@supabase/supabase-js': { createClient: () => { operations++; throw new Error('unexpected lookup'); } },
+    }, { setTimeout: () => { operations++; throw new Error('unexpected timer'); } });
+    const result = await services.getBillingAccountStatus('existing-user', budget);
+    assert.equal(result.billingAccountUnavailable, true);
+    assert.equal(result.billingAccount, false);
+    assert.equal(operations, 0);
+  }
+  for (const [budget, expected] of [[4000, 4000], [50000, 8000]]) {
+    let expire;
+    const services = load('src/server/public-services.ts', {}, {
+      setTimeout: (callback, milliseconds) => { assert.equal(milliseconds, expected); expire = callback; return 42; },
+      clearTimeout: () => {},
+    });
+    const pending = services.getBillingAccountStatus('existing-user', budget);
+    expire();
+    assert.equal((await pending).billingAccountUnavailable, true);
+  }
 });

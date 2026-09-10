@@ -41,7 +41,10 @@ export async function customerFor(userId: string, create = false): Promise<strin
   return customerFor(userId, false);
 }
 const BILLING_ACCOUNT_TIMEOUT_MS = 8000;
-export async function getBillingAccountStatus(userId: string): Promise<{ billingAccount: boolean; billingAccountUnavailable: boolean }> {
+export async function getBillingAccountStatus(userId: string, budgetMs = BILLING_ACCOUNT_TIMEOUT_MS): Promise<{ billingAccount: boolean; billingAccountUnavailable: boolean }> {
+  // Navigation metadata must not consume the remaining client request deadline.
+  const timeoutMs = Number.isFinite(budgetMs) ? Math.min(BILLING_ACCOUNT_TIMEOUT_MS, Math.max(0, budgetMs)) : 0;
+  if (timeoutMs === 0) return { billingAccount: false, billingAccountUnavailable: true };
   return new Promise(resolve => {
     let finished = false;
     const finish = (value: { billingAccount: boolean; billingAccountUnavailable: boolean }) => {
@@ -50,7 +53,7 @@ export async function getBillingAccountStatus(userId: string): Promise<{ billing
       clearTimeout(deadline);
       resolve(value);
     };
-    const deadline = setTimeout(() => finish({ billingAccount: false, billingAccountUnavailable: true }), BILLING_ACCOUNT_TIMEOUT_MS);
+    const deadline = setTimeout(() => finish({ billingAccount: false, billingAccountUnavailable: true }), timeoutMs);
     Promise.resolve().then(() => customerFor(userId, false)).then(
       customer => finish({ billingAccount: Boolean(customer), billingAccountUnavailable: false }),
       () => finish({ billingAccount: false, billingAccountUnavailable: true }),

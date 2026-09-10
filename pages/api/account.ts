@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import { holderChallenge, verifyHolder, unlinkHolder } from '../../src/server/public-holder';
 import { EMPTY_PRO_ACCESS } from '../../src/lib/pro-access';
 import { billingPortal, subscriptionCheckout } from '../../src/server/public-checkout';
@@ -6,6 +7,7 @@ import { digest, fail, jsonBody, origin, readToken, safeHandler, sessionCookie, 
 
 export const config = { api: { bodyParser: false }, maxDuration: 60 };
 export default safeHandler(async (req, res) => {
+  const startedAt = performance.now();
   writeGuard(req);
   const body = await jsonBody(req);
   const action = body.action;
@@ -14,7 +16,7 @@ export default safeHandler(async (req, res) => {
     const id = await account(req, false);
     if (id) await takeQuota(`status:${id}`, 180, 3600);
     const token=readToken(req);
-    const [status,billingAccount]=id && token?await Promise.all([getProStatus(id,digest(token)),getBillingAccountStatus(id)]):[EMPTY_PRO_ACCESS,{billingAccount:false,billingAccountUnavailable:false}];
+    const [status,billingAccount]=id && token?await Promise.all([getProStatus(id,digest(token)),getBillingAccountStatus(id, Math.max(0, 17000 - (performance.now() - startedAt)))]):[EMPTY_PRO_ACCESS,{billingAccount:false,billingAccountUnavailable:false}];
     res.json({...status, ...billingAccount, configured: true, signInAvailable: emailSignInEnabled(), signedIn: Boolean(id), billing: billingConfigured() }); return;
   }
   if (action === 'holder-challenge' || action === 'holder-verify' || action === 'holder-unlink') {
