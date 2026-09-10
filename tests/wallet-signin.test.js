@@ -54,10 +54,12 @@ test('concurrent tab intent is detected synchronously before successful adoption
 const oldOrigin=process.env.APP_ORIGIN;process.env.APP_ORIGIN=site;test.after(()=>{if(oldOrigin===undefined)delete process.env.APP_ORIGIN;else process.env.APP_ORIGIN=oldOrigin;});
 const security=load('src/server/public-security.ts');
 function server(services={}){return load('src/server/public-wallet-signin.ts',{'./public-services':{...services},'./public-security':security});}
-function nativeData(){return{user:{id:uid,identities:[{provider:'web3',user_id:uid,identity_data:{address:signer.address,chain:'ethereum',network:4663,domain:new URL(site).host}}]},session:{user:{id:uid}}};}
+function nativeData(){return{user:{id:uid,identities:[{provider:'web3',user_id:uid,identity_data:{custom_claims:{address:signer.address,chain:'ethereum',network:'4663',domain:new URL(site).host}}}]},session:{user:{id:uid}}};}
 test('native authority requires exact provider identity and UUID consistency, not user metadata',()=>{
  const s=server();assert.equal(s.nativeWalletUser(nativeData(),signer.address),uid);
- for(const [key,value] of [['address','0x'+'11'.repeat(20)],['chain','solana'],['network','4663'],['network',1],['domain','attacker.test']]){const data=nativeData();data.user.identities[0].identity_data[key]=value;assert.throws(()=>s.nativeWalletUser(data,signer.address));}
+ for(const [key,value] of [['address','0x'+'11'.repeat(20)],['chain','solana'],['network',4663],['network','1'],['network','04663'],['domain','attacker.test']]){const data=nativeData();data.user.identities[0].identity_data.custom_claims[key]=value;assert.throws(()=>s.nativeWalletUser(data,signer.address));}
+ for(const claims of [null,[],undefined,'4663']){const data=nativeData();data.user.identities[0].identity_data.custom_claims=claims;assert.throws(()=>s.nativeWalletUser(data,signer.address));}
+ const flat=nativeData();flat.user.identities[0].identity_data=flat.user.identities[0].identity_data.custom_claims;assert.throws(()=>s.nativeWalletUser(flat,signer.address));
  for(const mutate of [d=>d.user.identities[0].provider='email',d=>d.user.identities[0].user_id=randomUUID(),d=>d.session.user.id=randomUUID(),d=>d.user.identities=[],d=>{d.user.user_metadata=d.user.identities[0].identity_data;delete d.user.identities;}]){const data=nativeData();mutate(data);assert.throws(()=>s.nativeWalletUser(data,signer.address));}
 });
 test('binding bootstrap preserves existing cookies, rejects duplicates, and exposes no binding secret in data',()=>{

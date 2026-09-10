@@ -80,8 +80,10 @@ export function nativeWalletUser(data:unknown,address:string):string {
  if(typeof uid!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uid)||result?.session?.user?.id!==uid||!Array.isArray(user?.identities))fail(503,'AUTH_IDENTITY','Wallet identity could not be verified.');
  const identities=user.identities.filter(raw=>{
   const identity=raw as {provider?:unknown;user_id?:unknown;identity_data?:Record<string,unknown>};
-  const fields=identity?.identity_data;
-  return identity?.provider==='web3'&&identity.user_id===uid&&fields?.address===address&&fields.chain==='ethereum'&&fields.network===HOODRICH_CHAIN_ID&&fields.domain===new URL(origin()).host;
+  const claims=identity?.identity_data?.custom_claims;
+  if(!claims||typeof claims!=='object'||Array.isArray(claims))return false;
+  const fields=claims as Record<string,unknown>;
+  return identity?.provider==='web3'&&identity.user_id===uid&&fields.address===address&&fields.chain==='ethereum'&&fields.network===String(HOODRICH_CHAIN_ID)&&fields.domain===new URL(origin()).host;
  });
  if(identities.length!==1)fail(503,'AUTH_IDENTITY','Wallet identity could not be verified.');
  return uid;
