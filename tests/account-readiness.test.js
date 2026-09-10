@@ -507,3 +507,18 @@ test('billing metadata caps optional budgets and skips lookup when time is exhau
     assert.equal((await pending).billingAccountUnavailable, true);
   }
 });
+
+
+test('account status exposes only a session display fence for authenticated cookies', async () => {
+ const token = 'd'.repeat(64);
+ const signed = response();
+ await accountRoute({ account: async () => 'verified-account' })(request({ action: 'status' }, { cookie: `${security.cookieName()}=${token}` }), signed);
+ assert.equal(signed.body.sessionIdentity, security.publicSessionIdentity(token));
+ assert.match(signed.body.sessionIdentity, /^[a-f0-9]{64}$/);
+ assert.notEqual(signed.body.sessionIdentity, token);
+ assert.notEqual(signed.body.sessionIdentity, security.digest(token));
+ const anonymous = response();
+ await accountRoute()(request({ action: 'status', sessionIdentity: signed.body.sessionIdentity }, { cookie: `${security.cookieName()}=${token}` }), anonymous);
+ assert.equal(anonymous.body.sessionIdentity, null);
+ assert.equal(anonymous.body.signedIn, false);
+});

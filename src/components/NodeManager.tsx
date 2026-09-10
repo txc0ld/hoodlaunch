@@ -193,6 +193,11 @@ export default function NodeManager({ onSessionChange, sessionIdentity, proEnabl
       if (passwordInput) passwordInput.value = "";
       setVaultError("Backup password must be 12–128 characters."); return;
     }
+    const maximum = Math.min(proEnabled ? MAX_NODES : 1, allowance?.maxCount || 1);
+    if (!attemptRef.current && (!Number.isInteger(count) || count < 1 || count > maximum)) {
+      if (passwordInput) passwordInput.value = "";
+      setVaultError(`Choose a whole number from 1 to ${maximum}.`); return;
+    }
     if (!attemptRef.current && (!allowance?.available || count > allowance.maxCount)) {
       if (passwordInput) passwordInput.value = "";
       setVaultError("Your wallet allowance is not available. Check the reset time below."); return;
@@ -398,6 +403,7 @@ export default function NodeManager({ onSessionChange, sessionIdentity, proEnabl
           <div className={styles.stepHeading}><span>1</span><div><h2>Create and verify wallets</h2><p>Keys stay in this tab, which remains a sensitive signing environment. Wallets lock after 15 minutes without activity. Download the encrypted backup, then restore it to prove you can recover the wallets.</p></div></div>
           {vaultError && <div className={styles.alert} role="alert"><span>{vaultError}</span><button type="button" onClick={() => setVaultError("")}>Dismiss</button></div>}
           <p role="status">{proEnabled ? "Pro: create up to 50 wallets per attempt." : "Free: one wallet generation attempt per verified account every 24 hours."} {allowance?.nextEligibleAt && <>Next free wallet: {new Date(allowance.nextEligibleAt).toLocaleString()}.</>}</p>
+          <p>Save and verify the backup before closing this tab. An accepted attempt uses your allowance even if the backup is lost; the server cannot recover your keys.</p>
           {allowanceError && <p role="status">{allowanceError}</p>}
           <div className={styles.controls}>
             <label><span>Wallet count</span><input type="number" min="1" max={proEnabled ? MAX_NODES : 1} value={pending ? attemptRef.current?.count || count : count} onChange={(event) => setCount(Math.max(1, Math.min(MAX_NODES, Number(event.target.value) || 1)))} disabled={busy || !proEnabled || pending} /></label>
@@ -423,7 +429,7 @@ export default function NodeManager({ onSessionChange, sessionIdentity, proEnabl
           <div className={styles.stepHeading}><span>2</span><div><h2>{financeEnabled ? "Fund and monitor wallets" : "Wallet addresses & recovery"}</h2><p>{financeEnabled ? "Send ETH using your wallet or exchange, then bridge to Robinhood Chain." : "Keep your encrypted backup offline. Funding and trading tools require Pro and live-tool availability."}</p></div></div>
           {!verified ? <p className={styles.lockMessage}>Verify the encrypted backup in step 1 to reveal funding destinations.</p> : session && <>
             {session.addresses.map((address,index)=><div key={`${session.id}-${index}`}><strong>Node {index+1}</strong><code className={styles.fullAddress}>{address}</code>{financeEnabled && <NodeBridge session={session} nodeIndex={index} />}</div>)}
-            {!financeEnabled && <button className={styles.secondaryButton} onClick={copyAddresses} type="button">Copy addresses</button>}
+            {!financeEnabled && <><button className={styles.secondaryButton} onClick={copyAddresses} type="button">Copy addresses</button>{copyStatus && <p role="status">{copyStatus}</p>}</>}
             {financeEnabled && <>
             <div className={styles.chainHeading}><strong>Robinhood Chain funding target</strong><small>This is separate from the Ethereum withdrawal amount above. Check here only after each wallet has bridged to chain ID 4663.</small></div>
             <div className={styles.fundingControls}>
