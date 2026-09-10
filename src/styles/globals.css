@@ -6,10 +6,26 @@
   font-display: swap;
 }
 
+@font-face {
+  font-family: "Anton";
+  src: url("/fonts/anton-regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "UnifrakturCook";
+  src: url("/fonts/unifraktur-cook-bold.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
 :root {
   color-scheme: dark;
   font-family: "Space Grotesk", "Arial Narrow", "Helvetica Neue", Arial, ui-sans-serif, sans-serif;
-  background: #090b0a;
+  background: #0a0a0a;
   color: #edefe8;
 }
 
@@ -25,7 +41,7 @@ body,
 }
 
 body {
-  background: #090b0a;
+  background: #0a0a0a;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }
@@ -47,7 +63,7 @@ a {
   color: inherit;
 }
 
-::selection { background: #c7ff48; color: #090b0a; }
+::selection { background: #ccff00; color: #090b0a; }
 html { scroll-behavior: smooth; }
 
 @media (prefers-reduced-motion: reduce) {

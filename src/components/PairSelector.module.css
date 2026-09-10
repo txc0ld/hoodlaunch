@@ -17,3 +17,5 @@
 
 .retry { min-height:44px; padding:8px 14px; margin-top:12px; color:#c7ff48; background:#101812; border:1px solid #657c4b; border-radius:4px; cursor:pointer; }
 .retry:focus-visible { outline:2px solid #efffd1; outline-offset:3px; }
+
+.panel{border-color:#555a4c;border-radius:0;background:#11130f}.panel legend{font-family:"Anton","Arial Narrow",sans-serif;font-size:22px;font-weight:400;text-transform:uppercase}.free{color:#ccff00}.panel input[type="radio"]{accent-color:#ccff00}.inputLabel input{min-height:48px;border-color:#4b5044;border-radius:0;background:#171914;font-size:16px}.panel input:focus-visible{outline:3px solid #ccff00}.retry{border:2px solid #ccff00;border-radius:0;color:#0a0a0a;background:#ccff00;font-weight:700;box-shadow:3px 3px 0 #f3f3ec}

@@ -449,8 +449,8 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
     <main className={styles.page}>
       <a className={styles.skipLink} href="#launch">Skip to launch workspace</a>
       <nav className={styles.nav} aria-label="Primary navigation">
-        <a className={styles.brand} href="https://labs.hoodrich.rip" target="_blank" rel="noreferrer" aria-label="Open HOODLABS website"><span className={styles.brandMark}><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 6v20M25 6v20M7 16h18" /><circle cx="16" cy="16" r="13" /></svg></span><span>HOODLABS<small>EXPERIMENTAL SYSTEMS</small></span></a>
-        <div className={styles.navLinks}><a href="#launch"><span>01</span>Launch</a><a href="#token-lab"><span>02</span>Token Lab</a><a href="#pair-research"><span>03</span>Pair research</a></div>
+        <a className={styles.brand} href="https://labs.hoodrich.rip" target="_blank" rel="noreferrer" aria-label="Open HOODLABS website"><span className={styles.brandMark}>H</span><span>HOODLABS<small>BY HOODRICH</small></span></a>
+        <div className={styles.navLinks}><a href="#launch"><span>01</span>Launch</a><a href="#token-lab"><span>02</span>Plan</a><a href="#pair-research"><span>03</span>Choose pair</a></div>
         {wallet ? (
           <button className={styles.walletButton} type="button" onClick={wrongChain ? handleSwitch : undefined} disabled={walletBusy}>
             <span className={wrongChain ? styles.badDot : styles.goodDot} />{wrongChain ? "Wrong network" : shorten(wallet.account)}
@@ -459,14 +459,14 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
       </nav>
 
       <LabHero />
-      <nav className={styles.utilityNav} aria-label="HOODLABS resources"><span>LAB RESOURCES</span><a href="/guide" target="_blank" rel="noopener noreferrer">Protocol guide</a><a href="/pro" target="_blank" rel="noopener noreferrer">Pro access</a><a href="/exchanges" target="_blank" rel="noopener noreferrer">Exchange funding</a><a href="/security" target="_blank" rel="noopener noreferrer">Security & recovery</a></nav>
+      <nav className={styles.utilityNav} aria-label="HOODLABS resources"><span>GET READY</span><a href="/guide" target="_blank" rel="noopener noreferrer">How it works</a><a href="/pro" target="_blank" rel="noopener noreferrer">Free vs Pro</a><a href="/exchanges" target="_blank" rel="noopener noreferrer">Fund wallets</a><a href="/security" target="_blank" rel="noopener noreferrer">Stay safe</a></nav>
       {!launchEnabled && <p className={styles.pendingNotice} role="status">Launch preview — live launching is not enabled yet.</p>}
       {proEnabled && launchEnabled && <NodeManager onSessionChange={setNodeSession} />}
 
       <section id="launch" className={styles.shell} aria-labelledby="launch-title">
         <div className={styles.formPane}>
           <div className={styles.headingRow}>
-            <div><p className={styles.eyebrow}>01 / GENESIS CHAMBER</p><h2 id="launch-title">Prepare specimen</h2><p>Define its identity and inspect terms read directly from the PONS protocol.</p></div>
+            <div><p className={styles.eyebrow}>STEP 01 / BUILD YOUR TOKEN</p><h2 id="launch-title">Prepare your launch</h2><p>Add the public details, choose a pair, then review terms read directly from PONS.</p></div>
             <span className={styles.chainBadge}>Chain 4663</span>
           </div>
 
@@ -545,7 +545,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
           </div>
         </div>
 
-        <aside className={styles.previewPane} aria-label="Token preview and live launch terms">
+        <aside className={styles.previewPane} aria-label="Token preview and current launch terms">
           <div className={styles.previewCard}>
             <div className={styles.previewImage}>{previewUrl ? <img src={previewUrl} alt="" /> : <Icon name="image" />}</div>
             <h2>{draft.name.trim() || "Your token"}</h2>

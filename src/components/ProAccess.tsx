@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import styles from './ProAccess.module.css';
 import { utils } from 'ethers';
-import { EMPTY_PRO_ACCESS, HOODRICH_DECIMALS, HOODRICH_TOKEN, type ProAccessState } from '../lib/pro-access';
+import { EMPTY_PRO_ACCESS, HOODRICH_DECIMALS, HOODRICH_MINIMUM_FORMATTED, HOODRICH_TOKEN, PRO_PRICE_LABEL, type ProAccessState } from '../lib/pro-access';
 import { verifyHolderWallet, type HolderWallet } from '../lib/holder-wallet';
 type Access = ProAccessState;
 const NONE = EMPTY_PRO_ACCESS;
@@ -63,7 +63,7 @@ export default function ProAccess({ onAccessChange, salesEnabled = false }: { on
     finally { accountMutation.current = false; if (mounted.current) setBusy(false); }
   }
   return <section className={styles.panel} aria-labelledby="pro-title">
-    <div><p className={styles.label}>HOODLABS PRO</p><h2 id="pro-title">One launch. Up to 50 wallets.</h2><p>Free token launching. Unlock the Pro wallet workspace and managed uploads with a subscription or by holding 500,000 HOODRICH ($RICH).</p></div>
+    <div><p className={styles.label}>HOODLABS PRO · {PRO_PRICE_LABEL}</p><h2 id="pro-title">One launch. Up to 50 wallets.</h2><p>Token launching stays free. Pro adds the generated-wallet workspace and managed uploads. Subscribe for {PRO_PRICE_LABEL} or qualify by holding {HOODRICH_MINIMUM_FORMATTED} HOODRICH ($RICH).</p></div>
     {access.pro ? <p className={styles.active}>Pro active{access.holder?.eligible ? ' · HOODRICH holder' : ' · subscription'} · 50 upload attempts per day</p> : <p className={styles.note}>Your wallet keys stay in this browser. Account services never receive your seed phrase, backup password or exchange credentials. Network and protocol fees still apply.</p>}
     {access.configured && !access.signedIn && <form onSubmit={event => { event.preventDefault(); void act(sent ? 'verify-code' : 'request-code'); }} className={styles.controls}>
       <label>Email<input type="email" autoComplete="email" value={email} onChange={event => { setEmail(event.target.value); setSent(false); }} required maxLength={254} disabled={busy} /></label>
@@ -76,12 +76,12 @@ export default function ProAccess({ onAccessChange, salesEnabled = false }: { on
       <button disabled={busy} onClick={() => void act('logout')}>Sign out & lock wallets</button>
     </div>}
     <div className={styles.holder}>
-      <h3>Hold 500,000 HOODRICH to unlock Pro</h3>
-      <p>Keep at least 500,000 $RICH in one wallet on Robinhood Chain. Sign in by email, then verify that wallet with a message. Tokens stay in your wallet; no transfer, approval or gas payment is needed.</p>
+      <h3>Hold {HOODRICH_MINIMUM_FORMATTED} HOODRICH to unlock Pro</h3>
+      <p>Keep at least {HOODRICH_MINIMUM_FORMATTED} $RICH in one wallet on Robinhood Chain. Sign in by email, then verify that wallet with a message. Tokens stay in your wallet; no transfer, approval or gas payment is needed.</p>
       <p className={styles.note}>Token contract: <a href={'https://robinhoodchain.blockscout.com/token/' + HOODRICH_TOKEN} target="_blank" rel="noopener noreferrer"><code>{HOODRICH_TOKEN}</code></a></p>
       {access.holder?.address && <p>Linked wallet: <code>{access.holder.address}</code>{holderBalance() !== null && <> · Confirmed balance: {holderBalance()} $RICH</>}</p>}
       {access.holder?.unavailable && <p>Token balance verification is temporarily unavailable. An independently verified paid subscription still grants Pro.</p>}
-      {access.holder?.verified && !access.holder.eligible && !access.holder.unavailable && <p>This wallet is verified, but its confirmed balance is below 500,000 $RICH.</p>}
+      {access.holder?.verified && !access.holder.eligible && !access.holder.unavailable && <p>This wallet is verified, but its confirmed balance is below {HOODRICH_MINIMUM_FORMATTED} $RICH.</p>}
       {access.signedIn && <div className={styles.controls}>
         <button disabled={busy} onClick={() => void verifyWallet()}>{access.holder?.verified ? 'Verify wallet again' : 'Verify holding wallet'}</button>
         <button disabled={busy} onClick={() => void refresh()}>Refresh Pro access</button>

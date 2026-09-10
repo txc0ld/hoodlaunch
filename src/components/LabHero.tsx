@@ -1,17 +1,16 @@
 import { useEffect, useState } from "react";
 import styles from "./LabHero.module.css";
 
+const MARQUEE = ["PLAN THE TOKEN", "CHECK THE TERMS", "LAUNCH ON PONS", "KEEP YOUR KEYS"];
+
 function MotionIcon({ paused }: { paused: boolean }) {
-  return paused ? (
-    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z" /></svg>
-  ) : (
-    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6v12M16 6v12" /></svg>
-  );
+  return paused
+    ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z" /></svg>
+    : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6v12M16 6v12" /></svg>;
 }
 
 export default function LabHero() {
   const [motionEnabled, setMotionEnabled] = useState(false);
-
   useEffect(() => {
     const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
     setMotionEnabled(!preference.matches);
@@ -20,38 +19,40 @@ export default function LabHero() {
     return () => preference.removeEventListener("change", syncPreference);
   }, []);
 
-  return (
+  return <>
     <section className={`${styles.hero} ${motionEnabled ? styles.inMotion : styles.paused}`} aria-labelledby="lab-hero-title">
       <div className={styles.copy}>
-        <p className={styles.kicker}><span>HOODLABS / PONS V2</span><span>CHAIN 4663</span></p>
-        <h1 id="lab-hero-title">Where tokens<br />come to life.</h1>
-        <p className={styles.lede}>A precision launch environment for preparing, inspecting, and bringing onchain specimens to PONS Mainnet.</p>
+        <p className={styles.kicker}><span>HOODRICH PRESENTS</span><span>ROBINHOOD CHAIN · 4663</span></p>
+        <h1 id="lab-hero-title"><span>Build it</span><strong>HOODLABS</strong><span>Launch it.</span></h1>
+        <p className={styles.lede}>Plan your token, check live PONS terms, and prepare a launch from one clear workspace. Your wallet stays in control.</p>
         <div className={styles.actions}>
-          <a className={styles.primaryAction} href="#launch">Enter the launch chamber <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5h10v10M15 5 5 15" /></svg></a>
-          <a className={styles.secondaryAction} href="#token-lab">Open Token Lab</a>
+          <a className={styles.primaryAction} href="#launch">Start a launch <span aria-hidden="true">↘</span></a>
+          <a className={styles.secondaryAction} href="#token-lab">Plan tokenomics</a>
         </div>
         <dl className={styles.protocolStrip}>
-          <div><dt>Protocol</dt><dd>Live terms</dd></div>
-          <div><dt>Gas</dt><dd>ETH</dd></div>
-          <div><dt>Network</dt><dd>Robinhood Chain</dd></div>
+          <div><dt>Launch</dt><dd>Free</dd></div><div><dt>Gas</dt><dd>Native ETH</dd></div><div><dt>Keys</dt><dd>Stay with you</dd></div>
         </dl>
       </div>
-
-      <div className={styles.specimen} role="img" aria-label="A chrome and glass containment vessel holding a luminous green energy specimen">
+      <div className={styles.specimen}>
         <div className={styles.artFrame}>
-          <img src="/images/hoodlabs-specimen.webp" alt="Chrome laboratory containment vessel with a luminous green energy core" />
+          <img src="/images/hoodlabs-specimen.webp" alt="Chrome vessel with an acid-green energy core" />
           <span className={styles.scanLine} />
-          <span className={styles.orbit}><i /><i /><i /></span>
-          <span className={styles.reticle} />
-          <p className={styles.figureLabel}><span>FIG. 001</span><span>GENESIS SPECIMEN</span></p>
+          <p className={styles.figureLabel}><span>DROP 001</span><span>LAUNCH SYSTEM</span></p>
+          <div className={styles.stamp} aria-hidden="true"><span>HOOD</span><strong>LABS</strong><small>BUILT ONCHAIN</small></div>
         </div>
-        <div className={styles.readout} aria-hidden="true"><span>CONTAINMENT</span><strong>STABLE</strong><i /></div>
       </div>
-
-      <button className={styles.motionControl} type="button" onClick={() => setMotionEnabled((current) => !current)} aria-pressed={motionEnabled}>
-        <MotionIcon paused={!motionEnabled} />
-        <span>{motionEnabled ? "Pause motion" : "Play motion"}</span>
+      <button className={styles.motionControl} type="button" onClick={() => setMotionEnabled(current => !current)} aria-pressed={motionEnabled}>
+        <MotionIcon paused={!motionEnabled} /><span>{motionEnabled ? "Pause motion" : "Play motion"}</span>
       </button>
     </section>
-  );
+    <div className={`${styles.marquee} ${motionEnabled ? styles.marqueeMoving : styles.marqueePaused}`} aria-label="Plan the token, check the terms, launch on PONS, keep your keys">
+      <div aria-hidden="true">{[...MARQUEE, ...MARQUEE].map((item, index) => <span key={`${item}-${index}`}>{item}<i>✦</i></span>)}</div>
+    </div>
+    <section className={styles.routes} aria-labelledby="routes-title">
+      <div className={styles.routesIntro}><p>ONE WORKSPACE / THREE MOVES</p><h2 id="routes-title">What can I do here?</h2></div>
+      <a href="#token-lab"><span>01</span><strong>Plan</strong><p>Test supply, allocation and fee assumptions locally. Pro adds vesting comparisons.</p><i>Open Token Lab →</i></a>
+      <a href="#launch"><span>02</span><strong>Launch</strong><p>Build a token and review current PONS terms before your wallet signs.</p><i>Prepare a launch →</i></a>
+      <a href="/pro" target="_blank" rel="noopener noreferrer"><span>03</span><strong>Scale</strong><p>Unlock managed uploads and the generated-wallet workspace with Pro.</p><i>Compare access →</i></a>
+    </section>
+  </>;
 }

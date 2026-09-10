@@ -102,8 +102,8 @@ export default function TokenLab({ proEnabled = false }: { proEnabled?: boolean 
     <div className={styles.glow} aria-hidden="true" />
     <header className={styles.header}>
       <div className={styles.labMark}><Icon name="flask" /></div>
-      <div><p className={styles.eyebrow}>TOKEN LAB · LOCAL PLANNING INSTRUMENTS</p><h2 id="token-lab-title">Model the token before touching a contract.</h2><p>Explore supply, allocation and user-supplied fee assumptions. Values stay in this tab and are never sent to a server or into the launch engine.</p></div>
-      <span className={styles.tier}>{proEnabled ? 'PRO ACCESS' : 'FREE LAB'}</span>
+      <div><p className={styles.eyebrow}>STEP 02 · PLAN LOCALLY</p><h2 id="token-lab-title">Test the numbers before you launch.</h2><p>Explore supply, allocation and fee assumptions. Values stay in this tab and never enter the launch form.</p></div>
+      <span className={styles.tier}>{proEnabled ? 'PRO ACTIVE' : 'FREE PLAN'}</span>
     </header>
     <div className={styles.boundary}><Icon name="atoms" /><p><strong>Generic planning model.</strong> PONS launches use protocol supply rules; this model does not allocate tokens. It cannot change actual PONS supply, fees, tax, vesting or buyback rules.</p></div>
     <div className={styles.grid}>
@@ -131,10 +131,10 @@ export default function TokenLab({ proEnabled = false }: { proEnabled?: boolean 
         <p className={styles.micro}>This is arithmetic from your inputs, not a PONS market quote. It excludes price impact, slippage, gas and other protocol costs.</p>
       </article>
     </div>
-    {anyError && <div className={styles.retry} role="status"><span>One or more instruments need valid plain decimals.</span><button type="button" onClick={resetExample}>Restore valid example</button></div>}
+    {anyError && <div className={styles.retry} role="status"><span>One or more fields need a valid plain number.</span><button type="button" onClick={resetExample}>Restore valid example</button></div>}
 
     {proEnabled ? <div className={styles.proZone}>
-      <div className={styles.proHeading}><div><p className={styles.eyebrow}>PRO INSTRUMENTS</p><h3>Vesting timeline and scenario bench</h3></div><span>ACTIVE</span></div>
+      <div className={styles.proHeading}><div><p className={styles.eyebrow}>PRO PLANNING</p><h3>Vesting and saved comparisons</h3></div><span>ACTIVE</span></div>
       <article className={styles.vesting}>
         <div className={styles.instrumentTitle}><span>04</span><div><h3>Linear vesting simulator</h3><p>Models zero vested through the cliff, then linear release until duration.</p></div></div>
         <div className={styles.vestingInputs}><Field label="Vesting allocation" value={vestingAmount} onChange={setVestingAmount} suffix="tokens" /><Field label="Cliff" value={cliff} onChange={setCliff} suffix="months" max="119" /><Field label="Duration" value={duration} onChange={value => { setDuration(value); setElapsed(current => clampVestingElapsed(current, value)); }} suffix="months" min="0.000000000000000001" max="120" /></div>
@@ -152,7 +152,7 @@ export default function TokenLab({ proEnabled = false }: { proEnabled?: boolean 
         <div className={styles.exports}><button type="button" disabled={!scenarios.length} onClick={() => download('csv')}><Icon name="download" />Export CSV</button><button type="button" disabled={!scenarios.length} onClick={() => download('json')}><Icon name="download" />Export JSON</button></div>
         {proMessage && <p className={styles.message} role="status">{proMessage}</p>}
       </article>
-    </div> : <aside className={styles.locked} aria-label="Pro Token Lab instruments"><Icon name="lock" /><div><p className={styles.eyebrow}>PRO INSTRUMENTS</p><h3>Compare vesting and export scenarios</h3><p>Pro adds a linear vesting timeline, up to three local scenario snapshots, and CSV or JSON export. Pro controls remain unavailable until current account access is active.</p></div><a href="/pro" target="_blank" rel="noopener noreferrer">Compare Free and Pro</a></aside>}
+    </div> : <aside className={styles.locked} aria-label="Pro Token Lab tools"><Icon name="lock" /><div><p className={styles.eyebrow}>PRO PLANNING</p><h3>Compare vesting and export scenarios</h3><p>Pro adds a linear vesting timeline, up to three local snapshots, and CSV or JSON export. These controls unlock only while your current Pro access is active.</p></div><a href="/pro" target="_blank" rel="noopener noreferrer">Compare Free and Pro</a></aside>}
     <footer><p>{TOKEN_LAB_DISCLAIMER}</p><p>Inputs use human token units with up to 18 decimal places. Plans are held only in component memory and reset when this page closes; Pro scenarios are also cleared if access ends.</p></footer>
   </section>;
 }

@@ -38,3 +38,5 @@
 }
 
 .controls input,.bridgeButton,.confirmButton,.secondaryButton,.alert,.review,.operation,.fullAddress,.details div,.operation dl div{border-radius:2px}.controls input{min-height:44px;background:#181b18}.bridgeButton,.confirmButton,.secondaryButton{min-height:44px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;text-transform:uppercase;letter-spacing:.04em}.confirmButton{background:#c7ff48}.bridgeButton{border-color:#6c8435;background:#20291a}.review,.operation{background:#151815}
+
+.controls input{font-size:16px}.bridgeButton,.confirmButton,.secondaryButton{border-radius:0;font-family:"Space Grotesk",sans-serif;font-weight:700}.confirmButton{background:#ccff00;box-shadow:3px 3px 0 #f3f3ec}.reviewHeading span{color:#ccff00}.controls input:focus,.bridgeButton:focus-visible,.confirmButton:focus-visible,.secondaryButton:focus-visible,.alert button:focus-visible{border-color:#ccff00;box-shadow:0 0 0 3px rgba(204,255,0,.16)}
