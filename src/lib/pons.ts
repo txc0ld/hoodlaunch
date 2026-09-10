@@ -1,4 +1,5 @@
 import { BigNumber, providers, utils, constants } from 'ethers';
+import { getWalletProvider, getWalletVersion, subscribeWalletProvider } from './wallet-provider';
 import { LAUNCH_FACTORY_HASH, LAUNCH_ROUTER_HASH, verifyRuntime } from './trusted-runtime';
 import { FACTORY_ABI, ROUTER_ABI } from './pons-abi';
 import type { LaunchConfig, ProtocolState, WalletState, LaunchDraft, PreparedLaunch, LaunchReceipt, PairAsset } from './pons-types';
@@ -18,7 +19,7 @@ interface Ethereum {
   removeListener?(event: string, listener: () => void): void;
 }
 interface Preparation {
-  ethereum: Ethereum; threshold: string; token: string; curve: string; tax: number;
+  ethereum: Ethereum; walletVersion: number; threshold: string; token: string; curve: string; tax: number;
   state: 'ready' | 'submitted' | 'settled';
 }
 // Identity and freezing prevent UI state edits from changing an already reviewed transaction.
@@ -28,8 +29,8 @@ export const formatEth = (wei: string): string => utils.formatEther(wei);
 function fail(message: string): never { throw new Error(message); }
 function injected(): Ethereum {
   if (typeof window === 'undefined') return fail('Connect a browser wallet to continue.');
-  const value = (window as unknown as { ethereum?: Ethereum }).ethereum;
-  if (!value?.request) return fail('No browser wallet found. Install or open an Ethereum wallet.');
+  const value = getWalletProvider();
+  if (!value?.request) return fail('Connect a wallet to continue.');
   return value;
 }
 function providerFor(ethereum: Ethereum): providers.Web3Provider {
@@ -109,16 +110,20 @@ export async function getProtocolState(): Promise<ProtocolState> {
 }
 async function walletState(prompt: boolean): Promise<WalletState> {
   const ethereum = injected();
+  const version = getWalletVersion();
+  const assertCurrent = () => { if (getWalletProvider() !== ethereum || getWalletVersion() !== version) fail('Wallet changed. Connect again.'); };
   const accounts = await ethereum.request({ method: prompt ? 'eth_requestAccounts' : 'eth_accounts' }) as string[];
   if (!Array.isArray(accounts) || !accounts[0]) fail('Connect your wallet to continue.');
   const account = utils.getAddress(accounts[0]);
   const provider = providerFor(ethereum);
   const rawChainId = await ethereum.request({ method: 'eth_chainId' });
   const chainId = Number(rawChainId);
+  assertCurrent();
   if (chainId !== PONS_CHAIN_ID) return { account, chainId, balanceWei: '0', canLaunch: false };
   const [balance, eligible] = await Promise.all([provider.getBalance(account), read(provider, 'canLaunch', [account])]);
   await chain(provider);
   const fresh = await ethereum.request({ method: 'eth_accounts' }) as string[];
+  assertCurrent();
   if (!fresh[0] || fresh[0].toLowerCase() !== account.toLowerCase()) fail('Wallet account changed. Connect again.');
   return { account, chainId, balanceWei: balance.toString(), canLaunch: Boolean(eligible) };
 }
@@ -128,22 +133,22 @@ export async function switchToPons(): Promise<WalletState> {
   const ethereum = injected();
   try { await ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x1237' }] }); }
   catch (e) {
+    if (getWalletProvider() !== ethereum) fail('Wallet changed. Connect again.');
     if (errorCode(e) !== 4902) throw safeError(e);
     await ethereum.request({ method: 'wallet_addEthereumChain', params: [{ chainId: '0x1237', chainName: 'Robinhood Chain', nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, rpcUrls: [PONS_RPC], blockExplorerUrls: [PONS_EXPLORER] }] });
   }
+  if (getWalletProvider() !== ethereum) fail('Wallet changed. Connect again.');
   return refreshWallet();
 }
 export function onWalletChange(callback: () => void): () => void {
-  if (typeof window === 'undefined') return () => undefined;
-  const ethereum = (window as unknown as { ethereum?: Ethereum }).ethereum;
-  ['accountsChanged', 'chainChanged', 'disconnect'].forEach(event => ethereum?.on?.(event, callback));
-  return () => ['accountsChanged', 'chainChanged', 'disconnect'].forEach(event => ethereum?.removeListener?.(event, callback));
+  return subscribeWalletProvider(callback);
 }
-async function assertWallet(ethereum: Ethereum, wallet: WalletState): Promise<providers.Web3Provider> {
-  if (wallet.chainId !== PONS_CHAIN_ID || injected() !== ethereum) fail('Wallet or network changed. Review the launch again.');
+async function assertWallet(ethereum: Ethereum, wallet: WalletState, version = getWalletVersion()): Promise<providers.Web3Provider> {
+  if (wallet.chainId !== PONS_CHAIN_ID || injected() !== ethereum || getWalletVersion() !== version) fail('Wallet or network changed. Review the launch again.');
   const provider = providerFor(ethereum);
   await chain(provider);
   const accounts = await ethereum.request({ method: 'eth_accounts' }) as string[];
+  if (getWalletProvider() !== ethereum || getWalletVersion() !== version) fail('Wallet or network changed. Review the launch again.');
   if (!accounts[0] || accounts[0].toLowerCase() !== wallet.account.toLowerCase()) fail('Wallet account changed. Review the launch again.');
   return provider;
 }
@@ -214,7 +219,8 @@ export async function prepareLaunch(draft: LaunchDraft, wallet: WalletState): Pr
     draft = { ...draft, exemptions: [...draft.exemptions] };
     wallet = { ...wallet };
     const ethereum = injected();
-    const provider = await assertWallet(ethereum, wallet);
+    const walletVersion = getWalletVersion();
+    const provider = await assertWallet(ethereum, wallet, walletVersion);
     if (activeAccounts.has(wallet.account.toLowerCase()) || unresolved(wallet.account)) fail('A launch transaction is pending or its outcome is unknown. Check the wallet and explorer before continuing.');
     const valid = validate(draft, wallet.account);
     await codeCheck(provider, !valid.buy.isZero());
@@ -227,7 +233,7 @@ export async function prepareLaunch(draft: LaunchDraft, wallet: WalletState): Pr
     const fn = buying ? 'launchAndBuy' : 'launchToken';
     const args = buying ? [params, draft.configId, valid.pairToken, valid.buy, '0', wallet.account, valid.exemptions] : [params, draft.configId, valid.pairToken, valid.exemptions];
     const tx = { to: buying ? PONS_ROUTER : PONS_FACTORY, data: abi.encodeFunctionData(fn, args), value: value.toHexString() };
-    await assertWallet(ethereum, wallet);
+    await assertWallet(ethereum, wallet, walletVersion);
     const simulation = await provider.call({ ...tx, from: wallet.account });
     const quoted = abi.decodeFunctionResult(fn, simulation);
     const expected = buying ? BigNumber.from(quoted.tokensOut) : BigNumber.from(0);
@@ -236,13 +242,13 @@ export async function prepareLaunch(draft: LaunchDraft, wallet: WalletState): Pr
       if (minimum.isZero()) fail('Developer buy is too small to set a nonzero protected output.');
       args[4] = minimum.toString();
       tx.data = abi.encodeFunctionData(fn, args);
-      await assertWallet(ethereum, wallet);
+      await assertWallet(ethereum, wallet, walletVersion);
       await provider.call({ ...tx, from: wallet.account });
     }
     const estimated = await costs(provider, wallet.account, tx);
-    await assertWallet(ethereum, wallet);
+    await assertWallet(ethereum, wallet, walletVersion);
     const prepared: PreparedLaunch = Object.freeze({ ...(current.pair ? {pair:current.pair} : {}), account: wallet.account, chainId: PONS_CHAIN_ID, name: valid.name, symbol: valid.symbol, logo: valid.logo, creatorFeeRecipient: valid.creatorFeeRecipient, launchFeeWei: current.fee.toString(), developerBuyWei: valid.buy.toString(), totalValueWei: value.toString(), estimatedGasWei: estimated.gasWei.toString(), minTokensOut: minimum.toString(), expectedTokensOut: expected.toString(), expectedEconomics: current.economics, configId: draft.configId, salt, createdAt: Date.now(), transaction: Object.freeze({ ...tx, gasLimit: estimated.gasLimit.toString() }) });
-    preparations.set(prepared, { ethereum, threshold: current.pair?.graduationThresholdWei ?? current.config.graduationThresholdWei, token: quoted.token, curve: quoted.curve, tax: valid.creatorTaxBps, state: 'ready' });
+    preparations.set(prepared, { ethereum, walletVersion, threshold: current.pair?.graduationThresholdWei ?? current.config.graduationThresholdWei, token: quoted.token, curve: quoted.curve, tax: valid.creatorTaxBps, state: 'ready' });
     return prepared;
   } catch (e) { throw safeError(e); }
 }
@@ -419,11 +425,11 @@ async function executeUnderLock(prepared: PreparedLaunch, wallet: WalletState, o
   try {
     if (Date.now() - prepared.createdAt > MAX_AGE || Date.now() < prepared.createdAt) fail('Launch review expired. Review fresh terms before confirming.');
     if (wallet.account.toLowerCase() !== key || wallet.chainId !== prepared.chainId) fail('Wallet changed. Review the launch again.');
-    const provider = await assertWallet(record.ethereum, wallet);
+    const provider = await assertWallet(record.ethereum, wallet, record.walletVersion);
     const current = await terms(provider, prepared.account, prepared.configId, record.tax, prepared.pair?.address);
     if (current.economics.toLowerCase() !== prepared.expectedEconomics.toLowerCase() || !current.fee.eq(prepared.launchFeeWei) || (current.pair?.graduationThresholdWei ?? current.config.graduationThresholdWei) !== record.threshold || (prepared.pair && (!current.pair || !samePair(prepared.pair,current.pair)))) fail('Launch terms changed. Review fresh terms before confirming.');
     await codeCheck(provider, prepared.transaction.to === PONS_ROUTER);
-    await assertWallet(record.ethereum, wallet);
+    await assertWallet(record.ethereum, wallet, record.walletVersion);
     await provider.call({ ...prepared.transaction, from: prepared.account });
     const estimate = await costs(provider, prepared.account, prepared.transaction);
     // The request retains the reviewed gas limit, even if a fresh estimate is lower.
@@ -431,18 +437,18 @@ async function executeUnderLock(prepared: PreparedLaunch, wallet: WalletState, o
     const sentGasWei = BigNumber.from(prepared.transaction.gasLimit).mul(estimate.maxGasPrice);
     if (estimate.gasLimit.gt(prepared.transaction.gasLimit) || sentGasWei.gt(prepared.estimatedGasWei)) fail('Gas estimate increased. Review the updated cost before confirming.');
     if (estimate.balance.lt(BigNumber.from(prepared.totalValueWei).add(sentGasWei))) fail('Insufficient ETH for the launch and the full reviewed gas limit.');
-    await assertWallet(record.ethereum, wallet);
+    await assertWallet(record.ethereum, wallet, record.walletVersion);
     if (Date.now() - prepared.createdAt > MAX_AGE) fail('Launch review expired. Review fresh terms before confirming.');
     if (unresolved(prepared.account)) throw new PonsSubmissionError('This account has an unresolved launch. Recheck its recovery record.', 'unknown');
     const [nonce, latestNonce] = await Promise.all([provider.getTransactionCount(prepared.account,'pending'),provider.getTransactionCount(prepared.account,'latest')]);
     if (nonce!==latestNonce) fail('This account has a pending transaction. Wait before launching.');
-    await assertWallet(record.ethereum,wallet);
+    await assertWallet(record.ethereum,wallet,record.walletVersion);
     if(Date.now()-prepared.createdAt>MAX_AGE)fail('Launch review expired before submission.');
     // Refresh custom approval and metadata at the final send boundary as well as preflight.
     if (prepared.pair) {
       const finalTerms = await terms(provider,prepared.account,prepared.configId,record.tax,prepared.pair.address);
       if (!finalTerms.pair || !samePair(finalTerms.pair,prepared.pair) || finalTerms.economics.toLowerCase() !== prepared.expectedEconomics.toLowerCase() || !finalTerms.fee.eq(prepared.launchFeeWei)) fail('Launch terms changed. Review fresh terms before confirming.');
-      await assertWallet(record.ethereum,wallet);
+      await assertWallet(record.ethereum,wallet,record.walletVersion);
       if (Date.now()-prepared.createdAt>MAX_AGE) fail('Launch review expired before submission.');
     }
     const request = {

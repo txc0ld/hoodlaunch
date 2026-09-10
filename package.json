@@ -13,7 +13,10 @@
     "test": "node --test tests/*.test.js"
   },
   "dependencies": {
+    "@reown/appkit": "1.8.23",
+    "@reown/appkit-adapter-ethers5": "1.8.23",
     "@supabase/supabase-js": "2.116.0",
+    "@walletconnect/universal-provider": "2.23.7",
     "ethers": "5.8.0",
     "next": "16.3.4",
     "react": "19.2.6",
@@ -29,6 +32,9 @@
     "typescript": "5.9.3"
   },
   "overrides": {
-    "ws": "8.21.3"
+    "ws": "8.21.3",
+    "@coinbase/cdp-sdk": {
+      "axios": "1.20.0"
+    }
   }
 }

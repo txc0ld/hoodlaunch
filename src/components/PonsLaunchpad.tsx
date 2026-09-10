@@ -1,7 +1,6 @@
 import { ReactNode, ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { constants, utils } from "ethers";
 import {
-  connectWallet,
   getLaunchOperation,
   recoverLaunch,
   exportLaunchRecovery,
@@ -26,7 +25,9 @@ import LabHero from "./LabHero";
 import PairSelector from "./PairSelector";
 import TokenLab from "./TokenLab";
 import MobileWalletConnect from "./MobileWalletConnect";
-import { hasInjectedWallet } from "../lib/mobile-wallet";
+import WalletConnection from "./WalletConnection";
+import { getWalletVersion, walletRegistry } from "../lib/wallet-provider";
+import { boundedWalletRequest } from "../lib/wallet-connection";
 import styles from "./PonsLaunchpad.module.css";
 
 const PONS_CHAIN_ID = 4663;
@@ -117,6 +118,8 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
   const [walletBusy, setWalletBusy] = useState(false);
   const [walletError, setWalletError] = useState("");
   const [mobileWalletOpen, setMobileWalletOpen] = useState(false);
+  const [walletSelectionOpen, setWalletSelectionOpen] = useState(false);
+  const walletRequest = useRef(0);
   const [draft, setDraft] = useState<LaunchDraft>(EMPTY_DRAFT);
   const [pairAsset, setPairAsset] = useState<PairAsset | null>(null);
   const isCustomPair = draft.pairToken !== undefined && draft.pairToken !== constants.AddressZero;
@@ -180,11 +183,15 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
   }, []);
 
   const reloadWallet = useCallback(async (showError = false) => {
+    const sequence = ++walletRequest.current;
+    const version = getWalletVersion();
     try {
-      const next = await refreshWallet();
+      const next = await boundedWalletRequest(refreshWallet());
+      if (sequence !== walletRequest.current || version !== getWalletVersion()) return;
       setWallet(next);
       if (showError) setWalletError("");
     } catch (error) {
+      if (sequence !== walletRequest.current || version !== getWalletVersion()) return;
       setWallet(null);
       if (showError) setWalletError(errorMessage(error));
     }
@@ -207,12 +214,11 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
   useEffect(() => {
     return onWalletChange(() => {
       invalidateReview();
+      setWallet(null);
       void reloadWallet(false);
       void loadProtocol();
     });
-  // The wallet object changes after every successful connect/refresh, including
-  // same-account retries, so cleanup follows the old provider before rebinding.
-  }, [wallet, invalidateReview, loadProtocol, reloadWallet]);
+  }, [invalidateReview, loadProtocol, reloadWallet]);
 
   useEffect(() => () => uploadController.current?.abort(), []);
   useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
@@ -347,28 +353,28 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
     if (fileInput.current) fileInput.current.value = "";
   }, [previewUrl, updateDraft, proEnabled]);
 
-  async function handleConnect() {
-    if (!hasInjectedWallet()) {
-      setWalletError("");
-      setMobileWalletOpen(true);
-      return;
-    }
-    setWalletBusy(true);
-    setWalletError("");
+  function handleConnect() {
+    if (walletBusy || walletSelectionOpen) return;
+    setWalletError(""); setWalletSelectionOpen(true);
+  }
+
+  async function handleDisconnect() {
+    if (walletBusy) return;
+    walletRegistry.disconnect(); setWallet(null); invalidateReview(); setWalletBusy(true);
+    const ticket = walletRegistry.getSelection();
     try {
-      setWallet(await connectWallet());
-    } catch (error) {
-      setWalletError(errorMessage(error));
-    } finally {
-      setWalletBusy(false);
-    }
+      const sdk = await boundedWalletRequest(import('../lib/walletconnect-sdk'));
+      if (walletRegistry.getSelection() === ticket) await boundedWalletRequest(sdk.disconnectWalletConnect());
+    } catch { setWalletError('Disconnected from HOODLABS. If your wallet still lists this session, disconnect it there too.'); }
+    finally { setWalletBusy(false); }
   }
 
   async function handleSwitch() {
     setWalletBusy(true);
     setWalletError("");
     try {
-      setWallet(await switchToPons());
+      await boundedWalletRequest(switchToPons());
+      await reloadWallet(true);
       await loadProtocol();
     } catch (error) {
       setWalletError(errorMessage(error));
@@ -461,11 +467,14 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
       <nav className={styles.nav} aria-label="Primary navigation">
         <a className={styles.brand} href="https://labs.hoodrich.rip" target="_blank" rel="noreferrer" aria-label="Open HOODLABS website"><span className={styles.brandMark}>H</span><span>HOODLABS<small>BY HOODRICH</small></span></a>
         <div className={styles.navLinks}><a href="#launch"><span>01</span>Launch</a><a href="#token-lab"><span>02</span>Plan</a><a href="#pair-research"><span>03</span>Choose pair</a></div>
+        <div className={styles.walletControls}>
         {wallet ? (
           <button className={styles.walletButton} type="button" onClick={wrongChain ? handleSwitch : undefined} disabled={walletBusy}>
             <span className={wrongChain ? styles.badDot : styles.goodDot} />{wrongChain ? "Wrong network" : shorten(wallet.account)}
           </button>
         ) : <button className={styles.walletButton} type="button" onClick={handleConnect} disabled={walletBusy}><Icon name="wallet" />{walletBusy ? "Connecting…" : "Connect"}</button>}
+        {wallet && <><button className={styles.walletButton} type="button" disabled={walletBusy || walletSelectionOpen} onClick={handleConnect}>Change wallet</button><button className={styles.walletButton} type="button" disabled={walletBusy} onClick={() => void handleDisconnect()}>Disconnect</button></>}
+        </div>
       </nav>
 
       <LabHero />
@@ -611,6 +620,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
       {["submitting", "pending"].includes(submitState) && <div className={styles.modalBackdrop}><section ref={modalRef} className={`${styles.modal} ${styles.statusModal}`} role="status" aria-live="polite" tabIndex={-1} onKeyDown={handleModalKeyDown}><span className={styles.largeSpinner}><Icon name="spinner" /></span><h2>{submitState === "submitting" ? "Confirm in wallet" : "Launch pending"}</h2><p>{submitState === "submitting" ? "Review and approve the launch transaction in your wallet." : "Your transaction was submitted. Keep this page open while it confirms."}</p>{txHash && <code>{txHash}</code>}</section></div>}
 
       {receipt && submitState === "success" && <div className={styles.modalBackdrop} onMouseDown={(event) => { if (event.target === event.currentTarget) continueToNodeTrading(); }}><section ref={modalRef} className={`${styles.modal} ${styles.statusModal}`} role="dialog" aria-modal="true" aria-labelledby="success-title" tabIndex={-1} onKeyDown={handleModalKeyDown}><span className={styles.successIcon}><Icon name="check" /></span><p className={styles.eyebrow}>Verified onchain</p><h2 id="success-title">Token launched</h2><TokenLinks address={receipt.tokenAddress} /><p>Your token and bonding curve are live on PONS Mainnet.</p><dl className={styles.reviewList}><div><dt>Token</dt><dd><a href={`${PONS_EXPLORER}/address/${receipt.tokenAddress}`} target="_blank" rel="noreferrer">{shorten(receipt.tokenAddress, 10, 8)} <Icon name="external" /></a></dd></div><div><dt>Curve</dt><dd><a href={`${PONS_EXPLORER}/address/${receipt.curveAddress}`} target="_blank" rel="noreferrer">{shorten(receipt.curveAddress, 10, 8)} <Icon name="external" /></a></dd></div><div><dt>Transaction</dt><dd>{shorten(receipt.transactionHash, 10, 8)}</dd></div></dl><div className={styles.modalActions}><button className={styles.primaryButton} type="button" onClick={continueToNodeTrading}>{receipt.pairToken ? "Close launch receipt" : "Continue to node trading"}</button><a className={styles.secondaryButton} href={receipt.explorerUrl} target="_blank" rel="noreferrer">View verified transaction <Icon name="external" /></a></div></section></div>}
+      {walletSelectionOpen && <WalletConnection onClose={() => setWalletSelectionOpen(false)} onConnected={() => { setWalletSelectionOpen(false); void reloadWallet(true); }} onMobileFallback={() => { setWalletSelectionOpen(false); setMobileWalletOpen(true); }} />}
       <MobileWalletConnect open={mobileWalletOpen} onClose={() => setMobileWalletOpen(false)} onProviderReady={handleConnect} />
     </main>
   );

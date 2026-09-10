@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import styles from './ProAccess.module.css';
 import { utils } from 'ethers';
 import { EMPTY_PRO_ACCESS, HOODRICH_DECIMALS, HOODRICH_MINIMUM_FORMATTED, HOODRICH_TOKEN, PRO_PRICE_LABEL, type ProAccessState } from '../lib/pro-access';
-import { verifyHolderWallet, type HolderWallet } from '../lib/holder-wallet';
+import { verifyHolderWallet } from '../lib/holder-wallet';
+import { getWalletProvider, getWalletVersion, subscribeWalletProvider } from '../lib/wallet-provider';
 type Access = ProAccessState;
 const NONE = EMPTY_PRO_ACCESS;
 export default function ProAccess({ onAccessChange, salesEnabled = false }: { onAccessChange: (value: boolean) => void; salesEnabled?: boolean }) {
@@ -28,19 +29,15 @@ export default function ProAccess({ onAccessChange, salesEnabled = false }: { on
     } catch (error) { if (!mounted.current || accountMutation.current || sequence !== generation.current) return; setAccess(NONE); onAccessChange(false); setMessage(error instanceof Error ? error.message : 'Account services are unavailable.'); }
   }, [onAccessChange, request]);
   useEffect(() => { mounted.current = true; void refresh(); const timer = setInterval(() => void refresh(), 60000); const focus = () => void refresh(); window.addEventListener('focus', focus); return () => { mounted.current = false; walletGeneration.current++; generation.current++; clearInterval(timer); window.removeEventListener('focus', focus); onAccessChange(false); }; }, [refresh, onAccessChange]);
-  useEffect(() => {
-    const wallet = (window as unknown as { ethereum?: HolderWallet }).ethereum;
-    const changed = () => { walletGeneration.current++; };
-    wallet?.on?.('accountsChanged', changed); wallet?.on?.('chainChanged', changed); wallet?.on?.('disconnect', changed);
-    return () => { changed(); wallet?.removeListener?.('accountsChanged', changed); wallet?.removeListener?.('chainChanged', changed); wallet?.removeListener?.('disconnect', changed); };
-  }, []);
+  useEffect(() => subscribeWalletProvider(() => { walletGeneration.current++; }), []);
   async function verifyWallet() {
     if (busy || walletBusy.current || !access.signedIn) return;
-    const wallet = (window as unknown as { ethereum?: HolderWallet }).ethereum;
-    if (!wallet?.request) { setMessage('Open a browser wallet to verify your HOODRICH holdings.'); return; }
+    const wallet = getWalletProvider();
+    if (!wallet?.request) { setMessage('Use Connect at the top of this workspace to select the wallet holding your HOODRICH.'); return; }
     walletBusy.current = true; setBusy(true); setMessage('Approve the wallet ownership message. No transaction or token approval is requested.');
     const sequence = ++walletGeneration.current;
-    const current = () => { if (!mounted.current || sequence !== walletGeneration.current || (window as unknown as { ethereum?: HolderWallet }).ethereum !== wallet) throw new Error('Wallet verification changed or was closed. Start again.'); };
+    const version = getWalletVersion();
+    const current = () => { if (!mounted.current || sequence !== walletGeneration.current || version !== getWalletVersion() || getWalletProvider() !== wallet) throw new Error('Wallet verification changed or was closed. Start again.'); };
     try { await verifyHolderWallet(wallet, window.location.origin, request, current); await refresh(); }
     catch (error) { if (mounted.current) setMessage(error instanceof Error ? error.message.slice(0, 240) : 'Wallet verification failed.'); }
     finally { walletBusy.current = false; if (mounted.current) setBusy(false); }
