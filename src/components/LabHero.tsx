@@ -22,8 +22,8 @@ export default function LabHero() {
   return <>
     <section className={`${styles.hero} ${motionEnabled ? styles.inMotion : styles.paused}`} aria-labelledby="lab-hero-title">
       <div className={styles.copy}>
-        <p className={styles.kicker}><span>HOODRICH PRESENTS</span><span>ROBINHOOD CHAIN · 4663</span></p>
-        <h1 id="lab-hero-title"><span>Build it</span><strong>HOODLABS</strong><span>Launch it.</span></h1>
+        <p className={styles.kicker}><span>HOODRICH RESEARCH UNIT</span><span>ROBINHOOD CHAIN · 4663</span></p>
+        <h1 id="lab-hero-title"><span>Under the hood</span><strong>HOODLABS</strong><span>Make your move.</span></h1>
         <p className={styles.lede}>Plan your token, check live PONS terms, and prepare a launch from one clear workspace. Your wallet stays in control.</p>
         <div className={styles.actions}>
           <a className={styles.primaryAction} href="#launch">Start a launch <span aria-hidden="true">↘</span></a>
@@ -35,10 +35,11 @@ export default function LabHero() {
       </div>
       <div className={styles.specimen}>
         <div className={styles.artFrame}>
-          <img src="/images/hoodlabs-specimen.webp" alt="Chrome vessel with an acid-green energy core" />
+          <img src="/images/hoodlabs-underground-lab.webp" width="1254" height="1254" alt="Underground concrete workshop with a workbench, CRT equipment and an acid-green glass reactor" />
           <span className={styles.scanLine} />
-          <p className={styles.figureLabel}><span>DROP 001</span><span>LAUNCH SYSTEM</span></p>
-          <div className={styles.stamp} aria-hidden="true"><span>HOOD</span><strong>LABS</strong><small>BUILT ONCHAIN</small></div>
+          <p className={styles.figureLabel}><span>WORKBENCH 01</span><span>LAUNCH SYSTEM</span></p>
+          <div className={styles.equipmentReadout} aria-hidden="true"><span>LOCAL PLANNING</span><strong>INPUT / REVIEW / SIGN</strong><small>WORKFLOW PLATE · REV A</small></div>
+          <div className={styles.stamp} aria-hidden="true"><span>HOOD</span><strong>LABS</strong><small>UNDERGROUND UNIT</small></div>
         </div>
       </div>
       <button className={styles.motionControl} type="button" onClick={() => setMotionEnabled(current => !current)} aria-pressed={motionEnabled}>

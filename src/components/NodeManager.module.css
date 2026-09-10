@@ -97,3 +97,9 @@
 @media(max-width:560px){.manager{width:calc(100% - 20px);border-radius:3px}}
 
 .manager{border:1px solid #555a4c;border-top:5px solid #ccff00;background:#11130f;box-shadow:8px 8px 0 #050505,8px 8px 0 1px #3d4136}.managerToggle{font-family:"Space Grotesk",sans-serif;font-size:13px}.stepHeading h3{font-family:"Anton","Arial Narrow",sans-serif;font-size:25px;font-weight:400;text-transform:uppercase}.stepHeading>span{border-radius:0;background:#ccff00}.eyebrow,.copyStatus,.notice a{color:#ccff00}.controls input,.restoreBox input,.fundingControls input,.keystoreBox input,.keystoreBox select{font-size:16px}.primaryButton,.secondaryButton{border-radius:0;font-family:"Space Grotesk",sans-serif;font-weight:700}.primaryButton{background:#ccff00;box-shadow:3px 3px 0 #f3f3ec}.managerToggle:focus-visible,.primaryButton:focus-visible,.secondaryButton:focus-visible,.controls input:focus,.restoreBox input:focus,.fundingControls input:focus,.keystoreBox input:focus,.keystoreBox select:focus{border-color:#ccff00;box-shadow:0 0 0 3px rgba(204,255,0,.16)}
+
+.manager{position:relative;border-color:#686d5f;border-top-width:8px;background:repeating-linear-gradient(96deg,transparent 0 86px,rgba(255,255,255,.018) 87px 88px),#11130f;box-shadow:10px 10px 0 #050505}
+.manager::after{content:"NODE BENCH / LOCAL KEYS";position:absolute;z-index:2;top:13px;right:18px;padding:6px 9px;background:#ded7c2;color:#11120f;font:800 8px/1 "Space Grotesk",sans-serif;letter-spacing:.11em;transform:rotate(1deg);pointer-events:none}
+.managerToggle{padding-right:190px}.panel{background:#10120f}.step{background:rgba(18,21,17,.88)}
+.restoreBox,.keystoreBox,.sessionStatus,.notice,.lockMessage,.walletRow{border-color:#505549;background:#171914}
+@media(max-width:620px){.manager{border-top-width:6px;box-shadow:6px 6px 0 #050505}.manager::after{display:none}.managerToggle{padding-right:17px}}

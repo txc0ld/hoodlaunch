@@ -41,9 +41,23 @@ body,
 }
 
 body {
-  background: #0a0a0a;
+  overflow-x: clip;
+  background:
+    radial-gradient(circle at 12% 8%, rgba(204, 255, 0, .045), transparent 19rem),
+    repeating-linear-gradient(96deg, transparent 0 118px, rgba(238, 235, 220, .018) 119px 120px),
+    #090a08;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  opacity: .32;
+  background: repeating-linear-gradient(0deg, rgba(255,255,255,.018) 0 1px, transparent 1px 5px);
 }
 
 button,
@@ -61,6 +75,11 @@ select {
 
 a {
   color: inherit;
+}
+
+:where(a, button, input, textarea, select, summary):focus-visible {
+  outline: 3px solid #f5f3e9;
+  outline-offset: 3px;
 }
 
 ::selection { background: #ccff00; color: #090b0a; }

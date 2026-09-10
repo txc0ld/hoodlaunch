@@ -19,3 +19,5 @@
 .retry:focus-visible { outline:2px solid #efffd1; outline-offset:3px; }
 
 .panel{border-color:#555a4c;border-radius:0;background:#11130f}.panel legend{font-family:"Anton","Arial Narrow",sans-serif;font-size:22px;font-weight:400;text-transform:uppercase}.free{color:#ccff00}.panel input[type="radio"]{accent-color:#ccff00}.inputLabel input{min-height:48px;border-color:#4b5044;border-radius:0;background:#171914;font-size:16px}.panel input:focus-visible{outline:3px solid #ccff00}.retry{border:2px solid #ccff00;border-radius:0;color:#0a0a0a;background:#ccff00;font-weight:700;box-shadow:3px 3px 0 #f3f3ec}
+
+.panel{position:relative;border-color:#686d5f;border-left:6px solid #ccff00;background:repeating-linear-gradient(96deg,transparent 0 72px,rgba(255,255,255,.018) 73px 74px),#11130f;box-shadow:6px 6px 0 #050505}.panel::after{content:"PAIR INPUT";position:absolute;top:-10px;right:14px;padding:5px 8px;background:#ded7c2;color:#11120f;font:800 8px/1 "Space Grotesk",sans-serif;letter-spacing:.1em;transform:rotate(1deg)}
