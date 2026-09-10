@@ -22,6 +22,7 @@ import type { NodeSession } from "../lib/node-vault";
 import NodeManager from "./NodeManager";
 import NodeTrading from "./NodeTrading";
 import TokenLinks from "./TokenLinks";
+import LabHero from "./LabHero";
 import styles from "./PonsLaunchpad.module.css";
 
 const PONS_CHAIN_ID = 4663;
@@ -433,9 +434,10 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
 
   return (
     <main className={styles.page}>
+      <a className={styles.skipLink} href="#launch">Skip to launch workspace</a>
       <nav className={styles.nav} aria-label="Primary navigation">
-        <a className={styles.brand} href="https://labs.hoodrich.rip" target="_blank" rel="noreferrer" aria-label="Open HOODLABS website"><span className={styles.brandMark}>H</span><span>HOODLABS</span></a>
-        <div className={styles.navCenter}><span className={styles.product}>PONS V2</span><span className={styles.networkDot} /> Mainnet</div>
+        <a className={styles.brand} href="https://labs.hoodrich.rip" target="_blank" rel="noreferrer" aria-label="Open HOODLABS website"><span className={styles.brandMark}><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 6v20M25 6v20M7 16h18" /><circle cx="16" cy="16" r="13" /></svg></span><span>HOODLABS<small>EXPERIMENTAL SYSTEMS</small></span></a>
+        <div className={styles.navLinks}><a href="#launch"><span>01</span>Launch</a><a href="#token-lab"><span>02</span>Token Lab</a><a href="#pair-research"><span>03</span>Pair research</a></div>
         {wallet ? (
           <button className={styles.walletButton} type="button" onClick={wrongChain ? handleSwitch : undefined} disabled={walletBusy}>
             <span className={wrongChain ? styles.badDot : styles.goodDot} />{wrongChain ? "Wrong network" : shorten(wallet.account)}
@@ -443,15 +445,15 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
         ) : <button className={styles.walletButton} type="button" onClick={handleConnect} disabled={walletBusy}><Icon name="wallet" />{walletBusy ? "Connecting…" : "Connect"}</button>}
       </nav>
 
-      <nav aria-label="HOODLABS help" style={{display:"flex",gap:24,flexWrap:"wrap",maxWidth:1180,margin:"12px auto",padding:"0 24px",fontSize:14}}><a href="/guide" target="_blank" rel="noopener noreferrer">How to guide</a><a href="/pro" target="_blank" rel="noopener noreferrer">Why Pro?</a><a href="/exchanges" target="_blank" rel="noopener noreferrer">Exchange funding</a><a href="/security" target="_blank" rel="noopener noreferrer">Security & recovery</a></nav>
-      {proPanel}
+      <LabHero />
+      <nav className={styles.utilityNav} aria-label="HOODLABS resources"><span>LAB RESOURCES</span><a href="/guide" target="_blank" rel="noopener noreferrer">Protocol guide</a><a href="/pro" target="_blank" rel="noopener noreferrer">Pro access</a><a href="/exchanges" target="_blank" rel="noopener noreferrer">Exchange funding</a><a href="/security" target="_blank" rel="noopener noreferrer">Security & recovery</a></nav>
       {!launchEnabled && <p className={styles.pendingNotice} role="status">Launch preview — live launching is not enabled yet.</p>}
       {proEnabled && launchEnabled && <NodeManager onSessionChange={setNodeSession} />}
 
       <section id="launch" className={styles.shell} aria-labelledby="launch-title">
         <div className={styles.formPane}>
           <div className={styles.headingRow}>
-            <div><p className={styles.eyebrow}>PONS V2 · ETH launch</p><h1 id="launch-title">Launch token</h1><p>Create a token on PONS Mainnet. Live terms are read from the protocol.</p></div>
+            <div><p className={styles.eyebrow}>01 / GENESIS CHAMBER</p><h2 id="launch-title">Prepare specimen</h2><p>Define its identity and inspect terms read directly from the PONS protocol.</p></div>
             <span className={styles.chainBadge}>Chain 4663</span>
           </div>
 
@@ -494,7 +496,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
 
           <label className={styles.field}><span>Website <small>optional</small></span><input type="url" value={draft.website} onChange={(event) => updateDraft("website", event.target.value)} placeholder="https://your-token.com" autoComplete="url" /><small>Your token’s official website, included in its PONS launch details.</small></label>
 
-          <label className={styles.field}><span>Launch configuration</span><span className={styles.selectWrap}><select value={draft.configId} onChange={(event) => updateDraft("configId", event.target.value)} disabled={protocolLoading || !protocol}><option value="">{protocolLoading ? "Loading live configurations…" : "Choose configuration"}</option>{protocol?.configs.filter((config) => config.enabled).map((config) => <option key={config.id} value={config.id}>{config.id} · ETH pair</option>)}</select><Icon name="chevron" /></span>{protocol && !protocolLoading && !protocol.configs.some((config) => config.enabled) && <small role="status">No launch configurations are currently enabled.</small>}</label>
+          <label id="pair-research" className={styles.field}><span>Launch configuration</span><span className={styles.selectWrap}><select value={draft.configId} onChange={(event) => updateDraft("configId", event.target.value)} disabled={protocolLoading || !protocol}><option value="">{protocolLoading ? "Loading live configurations…" : "Choose configuration"}</option>{protocol?.configs.filter((config) => config.enabled).map((config) => <option key={config.id} value={config.id}>{config.id} · ETH pair</option>)}</select><Icon name="chevron" /></span>{protocol && !protocolLoading && !protocol.configs.some((config) => config.enabled) && <small role="status">No launch configurations are currently enabled.</small>}</label>
           <dl className={styles.configDetails} aria-label="Selected launch configuration terms">
             <div><dt>Total supply</dt><dd>{formatTokenSupply(selectedConfig?.supplyWei)}</dd></div>
             <div><dt>Pool fee</dt><dd>{formatPoolFee(selectedConfig?.poolFee)}</dd></div>
@@ -552,6 +554,8 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
 
       {receipt && <TokenLinks address={receipt.tokenAddress} />}
       {proEnabled && launchEnabled && <NodeTrading session={nodeSession} launchedTokenAddress={receipt?.tokenAddress || ""} />}
+      <div id="token-lab" className={styles.integrationSlot} data-integration="token-lab" aria-hidden="true" />
+      {proPanel}
 
       {prepared && submitState === "review" && <div className={styles.modalBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) invalidateReview(); }}>
         <section ref={modalRef} className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="review-title" tabIndex={-1} onKeyDown={handleModalKeyDown}>
