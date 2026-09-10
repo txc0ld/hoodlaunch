@@ -1,7 +1,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),crypto=require('node:crypto');
 const ts=require('typescript'),ethers=require('ethers'),{PGlite}=require('@electric-sql/pglite'),{createRequire}=require('node:module');
 const U='11111111-1111-1111-1111-111111111111',V='22222222-2222-2222-2222-222222222222';
-const S='a'.repeat(64),T='b'.repeat(64),THRESHOLD=ethers.BigNumber.from('500000000000000000000000');
+const S='a'.repeat(64),T='b'.repeat(64),THRESHOLD=ethers.BigNumber.from('666666000000000000000000');
 const wallet=ethers.Wallet.fromMnemonic('test test test test test test test test test test test junk'); // Public inert test fixture only.
 const other=ethers.Wallet.fromMnemonic('test test test test test test test test test test test junk',"m/44'/60'/0'/0/1");
 function load(file,mocks={},globals={}) {const filename=path.resolve(file),actual=createRequire(filename),module={exports:{}};const code=ts.transpileModule(fs.readFileSync(filename,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
@@ -32,8 +32,13 @@ async function harness(t){const db=new PGlite();await db.exec('create role anon;
 async function prove(h){const c=await h.challenge();await h.verify(c,await wallet.signMessage(c.message));return c;}
 test('real inert EIP191 proof is session-bound and the threshold is exact, inclusive and freshly checked',async t=>{
  const h=await harness(t),c=await prove(h);assert.match(c.message,/Chain ID: 4663/);assert.match(c.message,new RegExp(S));assert.match(c.message,/does not authorize transactions or token approvals/);
- for(const [amount,eligible] of [[THRESHOLD.sub(1),false],[THRESHOLD,true],[THRESHOLD.add(1),true],[ethers.constants.Zero,false]]){h.controls.balance=amount;const status=await h.access();assert.equal(status.eligible,eligible);assert.equal(status.balance,amount.toString());assert.equal(status.verified,true);}
+ for(const [amount,eligible] of [[ethers.utils.parseUnits('500000',18),false],[THRESHOLD.sub(1),false],[THRESHOLD,true],[THRESHOLD.add(1),true],[ethers.constants.Zero,false]]){h.controls.balance=amount;const status=await h.access();assert.equal(status.eligible,eligible);assert.equal(status.balance,amount.toString());assert.equal(status.verified,true);}
  assert.ok(h.calls.filter(x=>x.startsWith('eth_')).every(x=>x==='eth_chainId'));
+});
+test('public Pro terms use exact shared display and entitlement constants',()=>{
+ const terms=load('src/lib/pro-access.ts');
+ assert.equal(terms.PRO_PRICE_LABEL,'US$15/month');assert.equal(terms.HOODRICH_MINIMUM,'666666');assert.equal(terms.HOODRICH_MINIMUM_FORMATTED,'666,666');
+ assert.equal(terms.HOODRICH_MINIMUM_UNITS,THRESHOLD.toString());
 });
 test('wrong user/session/domain/chain/message/address and malformed signatures never bind a wallet',async t=>{
  const h=await harness(t),c=await h.challenge();await assert.rejects(()=>h.verify(c,'0x00'));

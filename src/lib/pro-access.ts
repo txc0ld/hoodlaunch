@@ -2,8 +2,10 @@
 export const HOODRICH_TOKEN = '0x6d5dc12131b2ad8748C54aB1Ac1b1a2cC53c2118';
 export const HOODRICH_CHAIN_ID = 4663;
 export const HOODRICH_DECIMALS = 18;
-export const HOODRICH_MINIMUM = '500000';
-export const HOODRICH_MINIMUM_UNITS = '500000000000000000000000';
+export const PRO_PRICE_LABEL = 'US$15/month';
+export const HOODRICH_MINIMUM = '666666';
+export const HOODRICH_MINIMUM_FORMATTED = '666,666';
+export const HOODRICH_MINIMUM_UNITS = '666666000000000000000000';
 export type HolderAccess = {
   address: string | null;
   verified: boolean;

@@ -11,7 +11,7 @@ The public app is a separate source release. Do not deploy the original local op
 | Stripe business account | Fantom Labs, `acct_1TFnGyBSWo9IPsgC` |
 | Stripe product | `prod_hoodlabs_pro`, HOODLABS Pro |
 
-The requested subscription is $6.90 per month. Currency must be confirmed before creating its recurring price; the business account defaults to AUD. Do not use an unrelated price or create a customer subscription manually. Customers subscribe through their own authenticated HOODLABS Checkout session.
+The subscription is US$15 per month. Use only the active USD 1500-minor-unit monthly licensed per-unit price for `prod_hoodlabs_pro`; the server reads these authoritative terms before it can reserve or create a payable Checkout session. Do not use an unrelated price or create a customer subscription manually. Customers subscribe through their own authenticated HOODLABS Checkout session.
 
 ## Server configuration
 
@@ -25,18 +25,18 @@ Set these in the **new** Vercel project's environment settings. Never prefix cre
 | `SUPABASE_ANON_KEY` | Key for that project's email-code identity flow. It is used only on the server in this implementation. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Server-only database access for revocable sessions, billing mapping and quotas. |
 | `STRIPE_SECRET_KEY` | Business Stripe API key, from the same account and mode as the Pro price. Never use the operator's exchange or wallet keys. |
-| `STRIPE_PRO_PRICE_ID` | Verified active recurring HOODLABS Pro price, monthly, 690 minor currency units. |
+| `STRIPE_PRO_PRICE_ID` | Verified active `prod_hoodlabs_pro` recurring price: USD, 1500 minor units, monthly interval count 1, licensed per-unit billing. |
 | `STRIPE_PORTAL_CONFIGURATION_ID` | Dedicated HOODLABS billing portal configuration; live catalog ID `bpc_1UDxZCBSWo9IPsgCDQGAA4YZ`. Use a separate test configuration for test-mode checks. |
 | `STRIPE_WEBHOOK_SECRET` | Signing secret for this deployment's Stripe webhook endpoint. |
 | `PINATA_JWT` | New business-scoped upload credential; do not copy the owner's existing personal token. |
 
 Use separate test and live provider configuration. Run `db/001_public_services.sql`, then `db/002_holder_pro.sql`, once against the new Supabase project after verifying its target. Migration002 adds service-only holder links, challenges and current-session proofs; retain both migrations in order. Enable email OTP with a code-bearing template, configured SMTP and appropriate provider send limits. Schedule the expired session/quota cleanup described in the migration. Test anonymous/authenticated roles cannot read service tables.
 
-A dedicated live HOODLABS portal configuration has been created with payment-method updates, invoice history and cancellation at the end of the paid billing period. The application must use a portal configuration whose cancellation policy matches the terms shown to customers. Register `/api/stripe-webhook` for subscription and Checkout lifecycle events. The endpoint checks signatures; actual Pro authorization comes from an active, exact-price Stripe subscription OR a current-session verified wallet holding at least500,000 HOODRICH. A redirect or webhook claim never grants access. The two providers are independent: a verified positive result on either path suffices even if the other provider is unavailable.
+A dedicated live HOODLABS portal configuration has been created with payment-method updates, invoice history and cancellation at the end of the paid billing period. The application must use a portal configuration whose cancellation policy matches the terms shown to customers. Register `/api/stripe-webhook` for subscription and Checkout lifecycle events. The endpoint checks signatures; actual Pro authorization comes from an active, exact-price Stripe subscription OR a current-session verified wallet holding at least 666,666 HOODRICH. A redirect or webhook claim never grants access. The two providers are independent: a verified positive result on either path suffices even if the other provider is unavailable.
 
 ## Holder eligibility
 
-No holder token/RPC values come from the client. The server pins Robinhood Chain4663, the official HOODRICH contract `0x6d5dc12131b2ad8748C54aB1Ac1b1a2cC53c2118`,18 decimals, and the inclusive500,000-token threshold. The public chain RPC is used for confirmed canonical balance/code checks. Email authentication and a fresh ownership message in the current one-hour session are required. No transfers, token approvals or custody are involved in proving holdings.
+No holder token/RPC values come from the client. The server pins Robinhood Chain 4663, the official HOODRICH contract `0x6d5dc12131b2ad8748C54aB1Ac1b1a2cC53c2118`, 18 decimals, and the inclusive 666,666-token threshold (`666666000000000000000000` smallest units). The public chain RPC is used for confirmed canonical balance/code checks. Email authentication and a fresh ownership message in the current one-hour session are required. No transfers, token approvals or custody are involved in proving holdings.
 
 Test nonce replay, concurrent verification, expiry/logout/unlink races, cross-account uniqueness, wrong origin/chain/address, balance changes and RPC failures against the migrated business test database before enabling access. Confirm holder-only accounts never get routed to a nonexistent subscription portal. Qualifying holders do not automatically cancel paid subscriptions.
 

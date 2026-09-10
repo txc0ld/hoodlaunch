@@ -5,7 +5,9 @@ type Db = { rpc(name: string, args: Record<string, unknown>): PromiseLike<{ data
 type Request = Stripe.Checkout.SessionCreateParams & { customer: string; client_reference_id: string; expires_at: number };
 type Reservation = { key: string; expires_at: number; request: Request; session_id: string | null; subscription_id: string | null };
 const MIN_REMAINING_SECONDS = 31 * 60;
+const PRO_PRODUCT_ID = 'prod_hoodlabs_pro';
 function reconcile(): never { return fail(409, 'CHECKOUT_RECONCILE', 'Your previous checkout needs reconciliation. Open billing or contact support; a second checkout was not created.'); }
+function invalidTerms(): never { return fail(503, 'BILLING_SETUP', 'Pro subscription terms are unavailable.'); }
 function stable(value: unknown): string {
   if (Array.isArray(value)) return '[' + value.map(stable).join(',') + ']';
   if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + stable((value as Record<string, unknown>)[key])).join(',') + '}';
@@ -30,6 +32,17 @@ function portalConfiguration(): string {
   if (!configuration || !/^bpc_[A-Za-z0-9]+$/.test(configuration)) fail(503, 'BILLING_SETUP', 'Billing portal configuration is unavailable.');
   return configuration;
 }
+async function validatePrice(stripe: Stripe, expectedId: string): Promise<void> {
+  let value: unknown;
+  try { value = await stripe.prices.retrieve(expectedId, { expand: ['product'] }); }
+  catch { return invalidTerms(); }
+  if (!value || typeof value !== 'object') invalidTerms();
+  const price = value as Stripe.Price;
+  const product = price.product;
+  if (price.id !== expectedId || !price.active || price.currency !== 'usd' || price.unit_amount !== 1500 || price.billing_scheme !== 'per_unit' || price.type !== 'recurring' ||
+      !price.recurring || price.recurring.interval !== 'month' || price.recurring.interval_count !== 1 || price.recurring.usage_type !== 'licensed' ||
+      !product || typeof product === 'string' || product.deleted === true || product.id !== PRO_PRODUCT_ID || product.active !== true) invalidTerms();
+}
 export async function billingPortal(stripe: Stripe, customer: string, appOrigin: string): Promise<string> {
   const configuration = portalConfiguration();
   const portal = await stripe.billingPortal.sessions.create({ customer, return_url: appOrigin + '/', configuration });
@@ -43,6 +56,7 @@ function validateSession(session: Stripe.Checkout.Session, r: Reservation): void
 export async function subscriptionCheckout(db: Db, stripe: Stripe, user: string, customer: string, price: string, appOrigin: string, now: () => number = Date.now): Promise<string> {
   portalConfiguration(); // A payable checkout must have a configured subscription-management path.
   if (!/^price_[A-Za-z0-9]+$/.test(price) || !/^cus_[A-Za-z0-9]+$/.test(customer)) reconcile();
+  await validatePrice(stripe, price); // No reservation or payable session exists before authoritative terms match display.
   const request: Stripe.Checkout.SessionCreateParams = { mode: 'subscription', customer, client_reference_id: user, line_items: [{ price, quantity: 1 }], subscription_data: { metadata: { hood_user_id: user } }, success_url: appOrigin + '/?billing=return', cancel_url: appOrigin + '/?billing=cancelled', allow_promotion_codes: false };
   async function reserve(previous?: Reservation, canceledSubscription?: string) {
     const { data, error } = await db.rpc('hood_checkout_reserve', { p_user: user, p_request: request, p_expected_key: previous?.key || null, p_expired_session: previous?.session_id || null, p_canceled_subscription: canceledSubscription || null });
