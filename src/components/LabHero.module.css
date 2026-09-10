@@ -17,3 +17,8 @@
 @media(max-width:900px){.hero{grid-template-columns:1fr;min-height:auto}.copy{min-height:620px;padding:64px 46px}.specimen{min-height:620px}.artFrame{border-left:0;border-top:1px solid rgba(222,229,216,.12)}.copy h1{font-size:clamp(60px,12vw,104px)}.motionControl{top:auto;bottom:20px;transform:none}}
 @media(max-width:560px){.hero{width:calc(100% - 20px);margin-bottom:18px}.copy{min-height:450px;padding:58px 24px 28px}.copy h1{font-size:clamp(55px,18vw,82px)}.lede{margin-top:28px}.actions{align-items:stretch;flex-direction:column}.protocolStrip{width:100%;margin-top:40px}.protocolStrip dd{font-size:10px}.specimen{min-height:380px}.artFrame img{object-fit:contain}.motionControl{right:14px;bottom:14px}.readout{left:14px;right:auto;bottom:14px}.figureLabel{top:20px;left:18px}}
 @media(prefers-reduced-motion:reduce){.inMotion .scanLine,.inMotion .orbit,.inMotion .artFrame img{animation:none}.artFrame img{transition:none}}
+
+.protocolStrip dt { font-size: 11px; }
+.protocolStrip dd { font-size: 14px; }
+.figureLabel { font-size: 10px; }
+@media(max-width:560px) { .protocolStrip dd { font-size: 12px; } }
