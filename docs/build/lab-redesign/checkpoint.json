@@ -1,0 +1,15 @@
+{
+  "base": "b2e2ba722ccacff48987e6aa401bc035d5377f12",
+  "status": "implementing",
+  "visualDirection": "science laboratory, chrome/glass specimen, graphite/chartreuse",
+  "owners": [
+    "lab_design",
+    "token_lab",
+    "custom_pairs"
+  ],
+  "deployTarget": "labs.hoodrich.rip / tx-build hoodlabs",
+  "liveEnabled": false,
+  "scope": "visual redesign, planning-only token tools, custom launch pair selection and protected implementation",
+  "baselineTests": "running",
+  "usage": "unknown"
+}
