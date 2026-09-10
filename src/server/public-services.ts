@@ -6,6 +6,7 @@ import type { NextApiRequest } from 'next';
 import { digest, fail, origin, readToken } from './public-security';
 
 export function accountConfigured() { return Boolean(process.env.APP_ORIGIN && process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY && process.env.SUPABASE_SERVICE_ROLE_KEY); }
+export function emailSignInEnabled() { return process.env.EMAIL_SIGNIN_ENABLED === 'true'; }
 export function billingConfigured() { return accountConfigured() && Boolean(process.env.STRIPE_SECRET_KEY && /^price_[A-Za-z0-9]+$/.test(process.env.STRIPE_PRO_PRICE_ID || '')); }
 export function database() {
   origin();
@@ -38,6 +39,23 @@ export async function customerFor(userId: string, create = false): Promise<strin
   const saved = await db.from('hood_billing').upsert({ user_id: userId, customer_id: customer.id }, { onConflict: 'user_id', ignoreDuplicates: true });
   if (saved.error) fail(503, 'BILLING_UNAVAILABLE', 'Billing is unavailable.');
   return customerFor(userId, false);
+}
+const BILLING_ACCOUNT_TIMEOUT_MS = 8000;
+export async function getBillingAccountStatus(userId: string): Promise<{ billingAccount: boolean; billingAccountUnavailable: boolean }> {
+  return new Promise(resolve => {
+    let finished = false;
+    const finish = (value: { billingAccount: boolean; billingAccountUnavailable: boolean }) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(deadline);
+      resolve(value);
+    };
+    const deadline = setTimeout(() => finish({ billingAccount: false, billingAccountUnavailable: true }), BILLING_ACCOUNT_TIMEOUT_MS);
+    Promise.resolve().then(() => customerFor(userId, false)).then(
+      customer => finish({ billingAccount: Boolean(customer), billingAccountUnavailable: false }),
+      () => finish({ billingAccount: false, billingAccountUnavailable: true }),
+    );
+  });
 }
 export function eligibleSubscription(subscription: Stripe.Subscription, customer: string, price: string) {
   return subscription.customer === customer && subscription.status === 'active' && subscription.items.data.some(item => item.price.id === price && item.quantity === 1 && item.current_period_end * 1000 > Date.now());

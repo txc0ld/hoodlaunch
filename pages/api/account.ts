@@ -1,7 +1,7 @@
 import { holderChallenge, verifyHolder, unlinkHolder } from '../../src/server/public-holder';
 import { EMPTY_PRO_ACCESS } from '../../src/lib/pro-access';
 import { billingPortal, subscriptionCheckout } from '../../src/server/public-checkout';
-import { account, accountConfigured, authClient, billingConfigured, customerFor, database, getProStatus, hasSubscription, stripeClient, takeQuota } from '../../src/server/public-services';
+import { account, accountConfigured, authClient, billingConfigured, customerFor, database, emailSignInEnabled, getBillingAccountStatus, getProStatus, hasSubscription, stripeClient, takeQuota } from '../../src/server/public-services';
 import { digest, fail, jsonBody, origin, readToken, safeHandler, sessionCookie, sessionToken, writeGuard } from '../../src/server/public-security';
 
 export const config = { api: { bodyParser: false }, maxDuration: 60 };
@@ -14,8 +14,8 @@ export default safeHandler(async (req, res) => {
     const id = await account(req, false);
     if (id) await takeQuota(`status:${id}`, 180, 3600);
     const token=readToken(req);
-    const status=id && token?await getProStatus(id,digest(token)):EMPTY_PRO_ACCESS;
-    res.json({...status, configured: true, signedIn: Boolean(id), billing: billingConfigured() }); return;
+    const [status,billingAccount]=id && token?await Promise.all([getProStatus(id,digest(token)),getBillingAccountStatus(id)]):[EMPTY_PRO_ACCESS,{billingAccount:false,billingAccountUnavailable:false}];
+    res.json({...status, ...billingAccount, configured: true, signInAvailable: emailSignInEnabled(), signedIn: Boolean(id), billing: billingConfigured() }); return;
   }
   if (action === 'holder-challenge' || action === 'holder-verify' || action === 'holder-unlink') {
     const id=(await account(req))!,token=readToken(req);if(!token)fail(401,'SIGN_IN','Sign in to verify holder access.');
@@ -26,6 +26,7 @@ export default safeHandler(async (req, res) => {
     await unlinkHolder(db,id,session);res.json({unlinked:true});return;
   }
   if (action === 'request-code' || action === 'verify-code') {
+    if (!emailSignInEnabled()) fail(503, 'SIGN_IN_UNAVAILABLE', 'Email sign-in is temporarily unavailable. Free launch planning remains available.');
     database();
     if (typeof body.email !== 'string' || body.email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) fail(400, 'EMAIL', 'Enter a valid email address.');
     const email = body.email.trim().toLowerCase();

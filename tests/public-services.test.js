@@ -17,7 +17,7 @@ const original = process.env.APP_ORIGIN; process.env.APP_ORIGIN='https://launch.
 test.after(()=>{if(original===undefined)delete process.env.APP_ORIGIN;else process.env.APP_ORIGIN=original;});
 function request(body={},extra={}) { const req=new PassThrough();req.method='POST';req.rawHeaders=['Origin','https://launch.example.com'];req.headers={origin:'https://launch.example.com','content-type':'application/json',...extra};process.nextTick(()=>req.end(Buffer.from(JSON.stringify(body))));return req; }
 function response() { return {code:200,headers:{},setHeader(k,v){this.headers[k]=v;},status(n){this.code=n;return this;},json(body){this.body=body;}}; }
-const baseServices={accountConfigured:()=>true,billingConfigured:()=>false,account:async()=>null,takeQuota:async()=>{},hasPro:async()=>false};
+const baseServices={accountConfigured:()=>true,emailSignInEnabled:()=>false,billingConfigured:()=>false,account:async()=>null,getBillingAccountStatus:async()=>({billingAccount:false,billingAccountUnavailable:false}),takeQuota:async()=>{},hasPro:async()=>false};
 function accountRoute(services={}) {return load('pages/api/account.ts',{'../../src/server/public-services':{...baseServices,...services},'../../src/server/public-security':security}).default;}
 test('wrong/missing/duplicate origin fails before account service',async()=>{
  let calls=0;const handler=accountRoute({account:async()=>{calls++;return 'attacker';}});

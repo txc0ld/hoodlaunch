@@ -25,6 +25,7 @@ export default function ProAccess({ onAccessChange, salesEnabled = false }: { on
     try {
       const result = await request('status') as Access;
       if (!mounted.current || accountMutation.current || sequence !== generation.current) return;
+      if (result.signInAvailable !== true) { setSent(false); setCode(''); }
       setAccess(result); onAccessChange(result.pro === true); setMessage(!result.configured ? 'Pro account services are being prepared. Free launch configuration is available below.' : !result.pro && (result.subscriptionUnavailable || result.holder?.unavailable) ? 'Access could not be fully verified. Retry when the service is available.' : '');
     } catch (error) { if (!mounted.current || accountMutation.current || sequence !== generation.current) return; setAccess(NONE); onAccessChange(false); setMessage(error instanceof Error ? error.message : 'Account services are unavailable.'); }
   }, [onAccessChange, request]);
@@ -62,16 +63,18 @@ export default function ProAccess({ onAccessChange, salesEnabled = false }: { on
   return <section className={styles.panel} aria-labelledby="pro-title">
     <div><p className={styles.label}>HOODLABS PRO · {PRO_PRICE_LABEL}</p><h2 id="pro-title">One launch. Up to 50 wallets.</h2><p>Token launching stays free. Pro adds the generated-wallet workspace and managed uploads. Subscribe for {PRO_PRICE_LABEL} or qualify by holding {HOODRICH_MINIMUM_FORMATTED} HOODRICH ($RICH).</p></div>
     {access.pro ? <p className={styles.active}>Pro active{access.holder?.granted ? ' · wallet grant' : access.holder?.eligible ? ' · HOODRICH holder' : ' · subscription'} · 50 upload attempts per day</p> : <p className={styles.note}>Your wallet keys stay in this browser. Account services never receive your seed phrase, backup password or exchange credentials. Network and protocol fees still apply.</p>}
-    {access.configured && !access.signedIn && <form onSubmit={event => { event.preventDefault(); void act(sent ? 'verify-code' : 'request-code'); }} className={styles.controls}>
+    {access.configured && !access.signedIn && access.signInAvailable !== true && <p role="status">Email sign-in is temporarily unavailable. Free launch planning remains available.</p>}
+    {access.configured && !access.signedIn && access.signInAvailable === true && <form onSubmit={event => { event.preventDefault(); void act(sent ? 'verify-code' : 'request-code'); }} className={styles.controls}>
       <label>Email<input type="email" autoComplete="email" value={email} onChange={event => { setEmail(event.target.value); setSent(false); }} required maxLength={254} disabled={busy} /></label>
       {sent && <label>Email code<input inputMode="numeric" autoComplete="one-time-code" value={code} onChange={event => setCode(event.target.value)} pattern="[0-9]{6,8}" required maxLength={8} disabled={busy} /></label>}
       <button disabled={busy}>{busy ? 'Working…' : sent ? 'Sign in' : 'Email me a code'}</button>
     </form>}
     {access.signedIn && <div className={styles.controls}>
       {((!access.holder?.eligible && !access.holder?.granted) || access.subscription) && <button disabled={busy || !access.billing || (!access.subscription && !salesEnabled)} onClick={() => void act(access.subscription ? 'portal' : 'checkout')}>{access.subscription ? 'Manage subscription' : access.billing && salesEnabled ? 'See Pro price & subscribe' : 'Pro subscriptions coming soon'}</button>}
-      <button disabled={busy || !access.billing} onClick={() => void act('portal')}>Manage billing</button>
+      {access.billingAccount === true && <button disabled={busy || !access.billing} onClick={() => void act('portal')}>Manage billing</button>}
       <button disabled={busy} onClick={() => void act('logout')}>Sign out & lock wallets</button>
     </div>}
+    {access.signedIn && access.billingAccountUnavailable === true && <p role="status">Billing account status is temporarily unavailable. Refresh before opening billing history.</p>}
     <div className={styles.holder}>
       <h3>Hold {HOODRICH_MINIMUM_FORMATTED} HOODRICH to unlock Pro</h3>
       <p>Keep at least {HOODRICH_MINIMUM_FORMATTED} $RICH in one wallet on Robinhood Chain. Sign in by email, then verify that wallet with a message. Tokens stay in your wallet; no transfer, approval or gas payment is needed.</p>
