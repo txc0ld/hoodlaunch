@@ -8,6 +8,7 @@ import {
   calculateFdv,
   calculateFeeImpact,
   calculateVesting,
+  clampVestingElapsed,
   exportScenarios,
   summarizeScenario,
   type AllocationInput,
@@ -58,7 +59,8 @@ export default function TokenLab({ proEnabled = false }: { proEnabled?: boolean 
   const allocationPlan = useMemo(() => attempt(() => calculateAllocations(supply, allocations)), [supply, allocations]);
   const buy = useMemo(() => attempt(() => calculateFeeImpact(buyAmount, buyFee)), [buyAmount, buyFee]);
   const sell = useMemo(() => attempt(() => calculateFeeImpact(sellAmount, sellFee)), [sellAmount, sellFee]);
-  const vesting = useMemo(() => attempt(() => calculateVesting(vestingAmount, cliff, duration, elapsed)), [vestingAmount, cliff, duration, elapsed]);
+  const inspectedElapsed = clampVestingElapsed(elapsed, duration);
+  const vesting = useMemo(() => attempt(() => calculateVesting(vestingAmount, cliff, duration, inspectedElapsed)), [vestingAmount, cliff, duration, inspectedElapsed]);
   const timeline = useMemo(() => {
     const start = attempt(() => calculateVesting(vestingAmount, cliff, duration, '0'));
     const atCliff = attempt(() => calculateVesting(vestingAmount, cliff, duration, cliff));
@@ -92,7 +94,9 @@ export default function TokenLab({ proEnabled = false }: { proEnabled?: boolean 
   }
   const anyError = fdv.error || allocationPlan.error || buy.error || sell.error || vesting.error;
   const cliffPosition = Math.min(100, Math.max(0, Number(duration) > 0 ? Number(cliff) / Number(duration) * 100 : 0));
-  const elapsedPosition = Math.min(100, Math.max(0, Number(duration) > 0 ? Number(elapsed) / Number(duration) * 100 : 0));
+  const elapsedPosition = Math.min(100, Math.max(0, Number(duration) > 0 ? Number(inspectedElapsed) / Number(duration) * 100 : 0));
+  const durationNumber = Number(duration);
+  const sliderMax = Number.isFinite(durationNumber) && durationNumber > 0 && durationNumber <= 120 ? duration : '120';
 
   return <section className={styles.lab} aria-labelledby="token-lab-title">
     <div className={styles.glow} aria-hidden="true" />
@@ -133,8 +137,8 @@ export default function TokenLab({ proEnabled = false }: { proEnabled?: boolean 
       <div className={styles.proHeading}><div><p className={styles.eyebrow}>PRO INSTRUMENTS</p><h3>Vesting timeline and scenario bench</h3></div><span>ACTIVE</span></div>
       <article className={styles.vesting}>
         <div className={styles.instrumentTitle}><span>04</span><div><h3>Linear vesting simulator</h3><p>Models zero vested through the cliff, then linear release until duration.</p></div></div>
-        <div className={styles.vestingInputs}><Field label="Vesting allocation" value={vestingAmount} onChange={setVestingAmount} suffix="tokens" /><Field label="Cliff" value={cliff} onChange={setCliff} suffix="months" max="119" /><Field label="Duration" value={duration} onChange={setDuration} suffix="months" min="0.000000000000000001" max="120" /></div>
-        <label className={styles.slider}><span>Inspect month <strong>{elapsed}</strong></span><input type="range" min="0" max={Number(duration) > 0 && Number(duration) <= 120 ? duration : '120'} step="1" value={Math.min(Number(elapsed) || 0, Number(duration) || 120)} onChange={event => setElapsed(event.target.value)} /></label>
+        <div className={styles.vestingInputs}><Field label="Vesting allocation" value={vestingAmount} onChange={setVestingAmount} suffix="tokens" /><Field label="Cliff" value={cliff} onChange={setCliff} suffix="months" max="119" /><Field label="Duration" value={duration} onChange={value => { setDuration(value); setElapsed(current => clampVestingElapsed(current, value)); }} suffix="months" min="0.000000000000000001" max="120" /></div>
+        <label className={styles.slider}><span>Inspect month <strong>{inspectedElapsed}</strong></span><input type="range" min="0" max={sliderMax} step="any" value={inspectedElapsed} disabled={!vesting.value} onChange={event => setElapsed(event.target.value)} /></label>
         {vesting.value ? <>
           <div className={styles.timeline} aria-hidden="true"><div className={styles.track} /><span className={styles.cliffMarker} style={{ left: `${cliffPosition}%` }} /><span className={styles.elapsedMarker} style={{ left: `${elapsedPosition}%` }} /><b className={styles.startLabel}>START</b><b className={styles.cliffLabel} style={{ left: `${cliffPosition}%` }}>CLIFF</b><b className={styles.endLabel}>END</b></div>
           <div className={styles.inlineResults}><Readout label="Vested at inspected month" accent>{vesting.value.vestedAmount} tokens</Readout><Readout label="Still unvested">{vesting.value.unvestedAmount} tokens</Readout></div>

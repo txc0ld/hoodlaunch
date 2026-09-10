@@ -117,6 +117,18 @@ export function calculateVesting(totalAmount: string, cliffMonths: string, durat
   };
 }
 
+/** Keeps the UI's inspected point inside a possibly changing duration. Invalid editing states reset safely to zero. */
+export function clampVestingElapsed(elapsedMonths: string, durationMonths: string): string {
+  try {
+    const elapsed = decimal(elapsedMonths, 'Elapsed time');
+    const duration = decimal(durationMonths, 'Duration', false);
+    if (duration.gt(MAX_VESTING_MONTHS)) return '0';
+    return format(elapsed.gt(duration) ? duration : elapsed);
+  } catch {
+    return '0';
+  }
+}
+
 export function summarizeScenario(scenario: TokenLabScenario): ScenarioSummary {
   const name = scenario.name.trim();
   if (!name || name.length > 40) throw new Error('Scenario name must contain 1 to 40 characters.');

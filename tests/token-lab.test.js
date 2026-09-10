@@ -13,7 +13,7 @@ vm.runInNewContext(`(function(require,module,exports){${js}\n})`, {})(id => {
   if (id === 'ethers') return ethers;
   throw new Error(`Unexpected dependency: ${id}`);
 }, moduleUnderTest, moduleUnderTest.exports);
-const { calculateFdv, calculateAllocations, calculateFeeImpact, calculateVesting, exportScenarios } = moduleUnderTest.exports;
+const { calculateFdv, calculateAllocations, calculateFeeImpact, calculateVesting, clampVestingElapsed, exportScenarios } = moduleUnderTest.exports;
 const plain = value => JSON.parse(JSON.stringify(value));
 
 const allocation = { team: '20', community: '40', liquidity: '25', treasury: '15' };
@@ -40,6 +40,19 @@ test('vesting is zero at cliff start, linear after cliff, and complete at durati
   assert.equal(calculateVesting('1200', '3', '15', '9').vestedAmount, '600');
   assert.deepEqual(plain(calculateVesting('1200', '3', '15', '15')), { elapsedMonths: '15', vestedPercent: '100', vestedAmount: '1200', unvestedAmount: '0' });
   assert.equal(calculateVesting('1200', '3', '15', '99').vestedAmount, '1200');
+});
+
+test('duration edits keep the inspected point coherent across integer, fractional, and invalid states', () => {
+  let elapsed = '9';
+  const changeDuration = duration => { elapsed = clampVestingElapsed(elapsed, duration); return calculateVesting('100', '0', duration, elapsed); };
+  assert.equal(changeDuration('2').elapsedMonths, '2');
+  assert.equal(elapsed, '2');
+  assert.equal(changeDuration('0.5').elapsedMonths, '0.5');
+  assert.equal(elapsed, '0.5');
+  assert.equal(clampVestingElapsed(elapsed, ''), '0');
+  elapsed = clampVestingElapsed(elapsed, '');
+  assert.equal(changeDuration('0.5').elapsedMonths, '0');
+  assert.equal(clampVestingElapsed('NaN', '2'), '0');
 });
 
 test('invalid, negative, exponent, non-finite, overflow-sized, and invalid vesting inputs fail closed', () => {
