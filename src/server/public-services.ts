@@ -48,11 +48,52 @@ export async function hasSubscription(userId: string) {
   const subscriptions = await stripeClient().subscriptions.list({ customer, status: 'active', limit: 100 });
   return subscriptions.data.some(s => eligibleSubscription(s, customer, process.env.STRIPE_PRO_PRICE_ID!));
 }
+// Bound the combined read below the client request timeout. Transport operations retain
+// their own deadlines; a slow provider must not delay another provider's verified grant.
+const PRO_CHECK_TIMEOUT_MS = 8000;
 export async function getProStatus(userId:string,sessionHash:string):Promise<ProStatus> {
-  const [subscription,holder]=await Promise.allSettled([hasSubscription(userId),Promise.resolve().then(()=>holderAccess(database(),userId,sessionHash))]);
-  const subscriptionEligible=subscription.status==='fulfilled' && subscription.value;
-  const holding=holder.status==='fulfilled'?holder.value:{...EMPTY_HOLDER_ACCESS,unavailable:true};
-  return {pro:subscriptionEligible || holding.eligible,subscription:subscriptionEligible,subscriptionUnavailable:subscription.status==='rejected',holder:holding};
+  return new Promise(resolve => {
+    let finished = false, subscriptionDone = false, holderDone = false;
+    const status: ProStatus = {
+      pro: false, subscription: false, subscriptionUnavailable: true,
+      holder: { ...EMPTY_HOLDER_ACCESS, unavailable: true },
+    };
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(deadline);
+      // Late provider responses cannot change authority or flags already returned.
+      resolve({ ...status, holder: { ...status.holder } });
+    };
+    const complete = () => {
+      status.pro = status.subscription || status.holder.eligible;
+      if (status.pro || (subscriptionDone && holderDone)) finish();
+    };
+    const deadline = setTimeout(finish, PRO_CHECK_TIMEOUT_MS);
+    // Install both rejection handlers immediately, including for synchronous setup
+    // failures. Pending/failed providers remain unavailable, never eligible.
+    Promise.resolve().then(() => hasSubscription(userId)).then(value => {
+      if (finished) return;
+      status.subscription = value;
+      status.subscriptionUnavailable = false;
+      subscriptionDone = true;
+      complete();
+    }, () => {
+      if (finished) return;
+      subscriptionDone = true;
+      complete();
+    });
+    Promise.resolve().then(() => holderAccess(database(),userId,sessionHash)).then(value => {
+      if (finished) return;
+      status.holder = value;
+      holderDone = true;
+      complete();
+    }, () => {
+      if (finished) return;
+      holderDone = true;
+      complete();
+    });
+  });
 }
 export async function hasPro(userId:string,sessionHash:string):Promise<boolean> {
   const status=await getProStatus(userId,sessionHash);

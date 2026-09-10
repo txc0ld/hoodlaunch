@@ -81,9 +81,51 @@ test('Stripe and holder eligibility are independent OR branches, including eithe
  const db={from:()=>({select:()=>({eq:()=>({maybeSingle:async()=>({data:{customer_id:'cus_test'},error:null})})})})};
  const svc=load('src/server/public-services.ts',{'@supabase/supabase-js':{createClient:()=>db},stripe:Stripe,'./public-holder':{holderAccess:async()=>{if(state.holderFail)throw Error('inert holder outage');return {address:wallet.address,verified:state.holder,eligible:state.holder,balance:null,unavailable:false};}}});
  for(const [subscription,holder,stripeFail,holderFail,expected] of [[true,false,false,true,true],[false,true,true,false,true],[true,true,false,false,true],[false,false,false,false,false],[false,false,true,false,false],[false,false,false,true,false]]){
-  Object.assign(state,{subscription,holder,stripeFail,holderFail});const status=await svc.getProStatus(U,S);assert.equal(status.pro,expected);assert.equal(status.subscriptionUnavailable,stripeFail);assert.equal(status.holder.unavailable,holderFail);
+  Object.assign(state,{subscription,holder,stripeFail,holderFail});const status=await svc.getProStatus(U,S);assert.equal(status.pro,expected);
+  // Early grants may leave the other provider unresolved. Unknown flags must
+  // never invent eligibility; when no provider grants, both outcomes are final.
+  assert.equal(status.subscription,status.subscriptionUnavailable?false:subscription);
+  assert.equal(status.holder.eligible,status.holder.unavailable?false:holder);
+  if(stripeFail || !expected)assert.equal(status.subscriptionUnavailable,stripeFail);
+  if(holderFail || !expected)assert.equal(status.holder.unavailable,holderFail);
   if(!expected && (stripeFail || holderFail))await assert.rejects(()=>svc.hasPro(U,S),e=>e.status===503);else assert.equal(await svc.hasPro(U,S),expected);
  }
+});
+function statusHarness(t, globals={}) {
+ const names=['APP_ORIGIN','SUPABASE_URL','SUPABASE_ANON_KEY','SUPABASE_SERVICE_ROLE_KEY','STRIPE_SECRET_KEY','STRIPE_PRO_PRICE_ID'],saved=Object.fromEntries(names.map(n=>[n,process.env[n]]));
+ Object.assign(process.env,{APP_ORIGIN:'https://launch.example.test',SUPABASE_URL:'https://inert.supabase.test',SUPABASE_ANON_KEY:'inert-anon',SUPABASE_SERVICE_ROLE_KEY:'inert-service',STRIPE_SECRET_KEY:'sk_test_inert',STRIPE_PRO_PRICE_ID:'price_fixed'});
+ t.after(()=>{for(const name of names){if(saved[name]===undefined)delete process.env[name];else process.env[name]=saved[name];}});
+ function deferred(){let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};}
+ const subscription=deferred(),holder=deferred(),timers=new Map();let timerId=0;
+ class Stripe{constructor(){this.subscriptions={list:()=>subscription.promise};}}
+ const db={from:()=>({select:()=>({eq:()=>({maybeSingle:async()=>({data:{customer_id:'cus_test'},error:null})})})})};
+ const svc=load('src/server/public-services.ts',{'@supabase/supabase-js':{createClient:()=>db},stripe:Stripe,'./public-holder':{holderAccess:()=>holder.promise}},
+  {setTimeout:(fn,ms)=>{const id=++timerId;timers.set(id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id),...globals});
+ const drain=async()=>{for(let i=0;i<20;i++)await Promise.resolve();};
+ return {svc,subscription,holder,timers,drain,expire:()=>{for(const [id,{fn,ms}] of [...timers]){assert.equal(ms,8000);timers.delete(id);fn();}},
+  paid:{data:[{customer:'cus_test',status:'active',items:{data:[{quantity:1,price:{id:'price_fixed'},current_period_end:Math.floor(Date.now()/1000)+1000}]}}]},
+  holding:{address:wallet.address,verified:true,eligible:true,balance:THRESHOLD.toString(),unavailable:false}};
+}
+for(const winner of ['subscription','holder'])test(`a verified ${winner} grants promptly while the other provider never resolves`,async t=>{
+ const h=statusHarness(t);let result;h.svc.getProStatus(U,S).then(x=>{result=x;});
+ h[winner].resolve(winner==='subscription'?h.paid:h.holding);await h.drain();
+ assert.ok(result,'verified provider must not wait for the unresolved branch');assert.equal(result.pro,true);assert.equal(h.timers.size,0);
+ assert.equal(result.subscription,winner==='subscription');assert.equal(result.subscriptionUnavailable,winner!=='subscription');assert.equal(result.holder.eligible,winner==='holder');assert.equal(result.holder.unavailable,winner!=='holder');
+ assert.equal(await h.svc.hasPro(U,S),true);assert.equal(h.timers.size,0);
+ const snapshot=JSON.stringify(result);h[winner==='subscription'?'holder':'subscription'].reject(Error('late inert provider outage'));await h.drain();assert.equal(JSON.stringify(result),snapshot);
+});
+for(const late of ['subscription','holder'])test(`late positive ${late} after the deadline cannot change a denied result`,async t=>{
+ const h=statusHarness(t);let result;h.svc.getProStatus(U,S).then(x=>{result=x;});await h.drain();assert.equal(result,undefined);
+ h.expire();await h.drain();assert.equal(result.pro,false);assert.equal(result.subscriptionUnavailable,true);assert.equal(result.holder.unavailable,true);assert.equal(h.timers.size,0);
+ const snapshot=JSON.stringify(result);h[late].resolve(late==='subscription'?h.paid:h.holding);await h.drain();assert.equal(JSON.stringify(result),snapshot);
+});
+for(const negative of ['subscription','holder','neither'])test(`no positive with ${negative} settled and another hung fails closed with 503`,async t=>{
+ const h=statusHarness(t);if(negative==='subscription')h.subscription.resolve({data:[]});if(negative==='holder')h.holder.resolve({...h.holding,eligible:false});
+ const outcome=assert.rejects(h.svc.hasPro(U,S),e=>e.status===503);await h.drain();assert.equal(h.timers.size,1);h.expire();await outcome;assert.equal(h.timers.size,0);
+});
+test('a late positive before the deadline still grants after the other branch denied',async t=>{
+ const h=statusHarness(t);h.subscription.resolve({data:[]});let result;h.svc.getProStatus(U,S).then(x=>{result=x;});await h.drain();assert.equal(result,undefined);
+ h.holder.resolve(h.holding);await h.drain();assert.equal(result.pro,true);assert.equal(result.subscriptionUnavailable,false);assert.equal(h.timers.size,0);
 });
 test('checkout routing uses paid subscription only, while holder API actions authenticate and bind server session',async t=>{
  const {PassThrough}=require('node:stream');const oldOrigin=process.env.APP_ORIGIN,oldLive=process.env.LIVE_LAUNCH_ENABLED;process.env.APP_ORIGIN='https://launch.example.test';process.env.LIVE_LAUNCH_ENABLED='true';
