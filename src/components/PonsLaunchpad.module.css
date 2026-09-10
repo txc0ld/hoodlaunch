@@ -473,3 +473,13 @@
 .utilityNav > span { color: #a1aa9d; }
 .eyebrow { font-size: 11px !important; }
 .page :global(#pair-research) { scroll-margin-top: 28px; margin: 26px 0; }
+.field { font-size: 13px; }
+.field input, .field textarea, .field select { min-width: 0; font-family: "Space Grotesk", ui-sans-serif, sans-serif; font-size: 16px; }
+.field input::placeholder, .field textarea::placeholder { color: #9aa294; }
+.field small, .uploadCopy small, .checkField small, .trustNote small { color: #a3ae9c; font-size: 12px; line-height: 1.5; }
+.configDetails dt, .terms dt, .reviewList dt { color: #a3ae9c; font-size: 12px; }
+.configDetails dd, .terms dd { font-size: 14px; }
+.primaryButton, .secondaryButton { font-size: 12px; }
+.textButton, .inlineError button, .alert button { min-height: 44px; }
+.removeImage { min-width: 44px; min-height: 44px; right: 4px; }
+.previewCard::before { content: "SPECIMEN / PREVIEW"; color: #a3ae9c; font-size: 10px; }
