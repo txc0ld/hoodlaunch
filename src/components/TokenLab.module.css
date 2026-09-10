@@ -105,7 +105,7 @@
 @media(max-width:600px){.lab{width:calc(100% - 20px);box-shadow:6px 6px 0 #050505,6px 6px 0 1px #3d4136}}
 
 /* Concrete bench shell with calm instrument faces. */
-.lab{--lime:#ccff00;--cyan:#dcd5bf;--paper:#f3f1e8;--line:#505549;position:relative;overflow:hidden;border-color:#686d5f;border-top-width:8px;background:repeating-linear-gradient(94deg,transparent 0 92px,rgba(255,255,255,.018) 93px 94px),linear-gradient(145deg,#141712,#090b09 74%);box-shadow:12px 12px 0 #050505,12px 12px 0 1px #3d4136}
+.lab{--lime:#ccff00;--cyan:#dcd5bf;--paper:#f3f1e8;--line:#505549;position:relative;overflow:clip;border-color:#686d5f;border-top-width:8px;background:repeating-linear-gradient(94deg,transparent 0 92px,rgba(255,255,255,.018) 93px 94px),linear-gradient(145deg,#141712,#090b09 74%);box-shadow:12px 12px 0 #050505,12px 12px 0 1px #3d4136}
 .lab::after{content:"TOKEN LAB / LOCAL MODEL";position:absolute;top:16px;right:20px;padding:7px 11px;background:#ded7c2;color:#11120f;font:800 8px/1 "Space Grotesk",sans-serif;letter-spacing:.12em;transform:rotate(1.5deg)}
 .glow{border-radius:0;border-color:rgba(204,255,0,.18);transform:rotate(12deg)}
 .header h2,.instrumentTitle h3,.instrumentTitle h4,.proHeading h3{font-family:"Anton","Arial Narrow",sans-serif;font-weight:400;text-transform:uppercase;letter-spacing:.01em}
