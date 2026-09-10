@@ -22,19 +22,19 @@ function harness(options={}) {
     async getBalance(node,block){assert.equal(node,wallet.address);if(this.dest)return bn(block===99?0:options.lowDestination?1:'10000000000000000');return bn(options.lowBalance?'1':'1000000000000000000');}
     async estimateGas(){if(options.forgetDuringEstimate)mutable.active=false;return bn(options.hugeGas?200000:35000);}
     async getCode(){return this.dest?(options.wrongRouterCode?'0x00':require('./fixtures/relay-router-runtime.json').runtimeBytecode):(options.wrongSourceCode?'0x00':require('./fixtures/relay-source-runtime.json').runtimeBytecode);}
-    async getBlock(){return {hash:'0x'+'aa'.repeat(32)};}
-    async getBlockNumber(){return 101;}
+    async getBlock(number){if(this.dest){mutable.destBlockReads=(mutable.destBlockReads||0)+1;}return {number,hash:'0x'+((this.dest && (options.orphanDestination || (options.reorgDuringProof && mutable.destBlockReads>2)))?'bb':'aa').repeat(32),parentHash:'0x'+'aa'.repeat(32)};}
+    async getBlockNumber(){return this.dest && options.insufficientHead ? 100 : 101;}
     async getFeeData(){if(options.prepareDelay)mutable.now+=options.prepareDelay;return {maxFeePerGas:bn(options.highFee?'200000000000':'2000000000'),maxPriorityFeePerGas:bn('1000000000')};}
     async getTransactionCount(){return options.changedNonce?2:0;}
     async getTransactionReceipt(hash){
       if(this.dest){const r=JSON.parse([...memory.values()][0]);const router='0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f';
         const event=abi.encodeEventLog(abi.getEvent('FundsMovement'),[options.wrongPaymentFrom?wallet.address:router,options.wrongPaymentRecipient?router:wallet.address,ethers.constants.AddressZero,r.minimumOutputWei,options.wrongOrder?'0x'+'99'.repeat(32):r.orderId]);
-        return {status:options.destinationFailure?0:1,confirmations:3,transactionHash:hash,to:fixture.protocol.v2.paymentDetails.depository,blockNumber:100,logs:options.noPayment?[]:[{address:router,...event}]};}
+        return {status:options.destinationFailure?0:1,confirmations:3,transactionHash:hash,from:wallet.address,to:fixture.protocol.v2.paymentDetails.depository,blockNumber:100,blockHash:options.missingDestinationHash?undefined:'0x'+'aa'.repeat(32),logs:options.noPayment?[]:[{address:router,blockNumber:100,blockHash:'0x'+(options.orphanLog?'bb':'aa').repeat(32),transactionHash:hash,removed:!!options.removedLog,...event}]};}
       if(mutable.stage==='pending')return null;
       const r=JSON.parse([...memory.values()][0]);const event=abi.encodeEventLog(abi.getEvent('RelayNativeDeposit'),[wallet.address,r.amountWei,r.orderId]);
       return {transactionHash:hash,from:wallet.address,to:fixture.protocol.v2.paymentDetails.depository,status:options.sourceRevert?0:1,blockNumber:100,blockHash:'0x'+'aa'.repeat(32),confirmations:3,logs:options.missingDeposit?[]:[{address:fixture.protocol.v2.paymentDetails.depository,...event}]};
     }
-    async getTransaction(hash){const r=JSON.parse([...memory.values()][0]);return {hash,chainId:1,from:wallet.address,to:fixture.protocol.v2.paymentDetails.depository,nonce:0,value:bn(r.amountWei),data:abi.encodeFunctionData('depositNative',[wallet.address,r.orderId])};}
+    async getTransaction(hash){if(this.dest){if(options.missingDestinationTx)return null;return {hash:options.wrongDestinationTxHash?'0x'+'cc'.repeat(32):hash,chainId:4663,from:wallet.address,to:fixture.protocol.v2.paymentDetails.depository,blockNumber:100,blockHash:'0x'+(options.unminedDestinationTx?'bb':'aa').repeat(32)};}const r=JSON.parse([...memory.values()][0]);return {hash,chainId:1,from:wallet.address,to:fixture.protocol.v2.paymentDetails.depository,nonce:0,value:bn(r.amountWei),data:abi.encodeFunctionData('depositNative',[wallet.address,r.orderId])};}
     removeAllListeners(){}
   }
   class FixtureWallet extends ethers.Wallet {static createRandom(){return ethers.Wallet.fromMnemonic(testMnemonic);}}
@@ -168,3 +168,8 @@ test('vault bridge lifecycle callback revokes signing authority before broadcast
 });
 
 test('source runtime is checked again at execution, before signer callback',async()=>{const options={},h=harness(options),review=await prepare(h);options.wrongSourceCode=true;let signed=0;await assert.rejects(h.bridge.executeRelayBridge(h,review,h.assertActive,()=>{signed++;throw Error('unexpected');}));assert.equal(signed,0);assert.equal(h.calls.filter(x=>x==='eth_sendRawTransaction').length,0);});
+
+ test('destination completion requires canonical receipt, mined transaction, event identity and final block recheck',async()=>{
+ for(const options of [{missingDestinationHash:true},{orphanDestination:true},{insufficientHead:true},{missingDestinationTx:true},{wrongDestinationTxHash:true},{unminedDestinationTx:true},{orphanLog:true},{removedLog:true},{reorgDuringProof:true}]){
+ const h=harness(options);await execute(h,await prepare(h));h.mutable.stage='confirmed';const op=await h.bridge.refreshNodeBridgeOperation(wallet.address);assert.notEqual(op.status,'complete',JSON.stringify(options));await assert.rejects(prepare(h));}
+});

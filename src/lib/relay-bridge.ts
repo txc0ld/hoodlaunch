@@ -222,6 +222,7 @@ export async function refreshNodeBridgeOperation(node:string):Promise<NodeBridge
     if(!lock)throw new Error('Another tab is operating this node.');
     const current=read(node);if(!current || current.sourceTxHash!==r.sourceTxHash)throw new Error('The bridge operation changed. Reload its status.');
     const p=provider(),d=provider(true);
+    let deliveryProof: {blockNumber:number; blockHash:string; parentHash:string; txHash:string; to:string; from:string} | undefined;
     try {
       await Promise.all([chain(p,1),chain(d,4663)]);
       const [receipt,tx]=await Promise.all([p.getTransactionReceipt(r.sourceTxHash),p.getTransaction(r.sourceTxHash)]);
@@ -250,26 +251,42 @@ export async function refreshNodeBridgeOperation(node:string):Promise<NodeBridge
         const result=obj(await api('/intents/status/v3?requestId='+r.requestId));
         if(result.originChainId!==1 || result.destinationChainId!==4663 || !Array.isArray(result.inTxHashes) || !result.inTxHashes.some((h:unknown)=>hash(h)===r.sourceTxHash))throw Error();
         if(result.status==='success' && Array.isArray(result.txHashes) && result.txHashes.length===1) {
-          const destHash=hash(result.txHashes[0]), receipt=await d.getTransactionReceipt(destHash);
+          const destHash=hash(result.txHashes[0]);
+          const [receipt,destTx]=await Promise.all([d.getTransactionReceipt(destHash),d.getTransaction(destHash)]);
           if(receipt && receipt.status===1 && receipt.confirmations>=2 && receipt.transactionHash.toLowerCase()===destHash &&
             (same(receipt.to,RELAY_DEPOSITORY)||same(receipt.to,ROUTER))) {
+            if(!Number.isSafeInteger(receipt.blockNumber) || receipt.blockNumber<1)throw Error();
+            const blockHash=hash(receipt.blockHash);
+            if(!destTx || hash(destTx.hash)!==destHash || destTx.chainId!==4663 || destTx.blockNumber!==receipt.blockNumber || hash(destTx.blockHash)!==blockHash || !same(destTx.to,receipt.to) || !same(destTx.from,receipt.from))throw Error();
+            const [block,parent,head]=await Promise.all([d.getBlock(receipt.blockNumber),d.getBlock(receipt.blockNumber-1),d.getBlockNumber()]);
+            if(!block || !parent || block.number!==receipt.blockNumber || parent.number!==receipt.blockNumber-1 || hash(block.hash)!==blockHash || hash(block.parentHash)!==hash(parent.hash) || !Number.isSafeInteger(head) || head<receipt.blockNumber+1)throw Error();
             const [before,after,routerCode]=await Promise.all([d.getBalance(node,receipt.blockNumber-1),d.getBalance(node,receipt.blockNumber),d.getCode(ROUTER,receipt.blockNumber)]);
             // Deployed RelayRouterV3 emits this only after transferring native ETH.
             // Unknown metadata encodings cannot prove this order and remain unverified.
             const payment=receipt.logs.some(log=>{try {
-              if(!same(log.address,ROUTER))return false;
+              if(!same(log.address,ROUTER) || log.removed || log.blockNumber!==receipt.blockNumber || hash(log.blockHash)!==blockHash || hash(log.transactionHash)!==destHash)return false;
               const event=ABI.parseLog(log);return event.name==='FundsMovement' && same(event.args.from,ROUTER) &&
                 same(event.args.to,node) && same(event.args.currency,ZERO) && event.args.amount.gte(r.minimumOutputWei) &&
                 String(event.args.metadata).toLowerCase()===r.orderId;
             }catch{return false;}});
             // A balance delta is conservative: spending within that block can leave completion unverified.
-            if(payment && utils.keccak256(routerCode)==='0xde894e5c12e9513d50613c8fff375ecbf19b5d9a53bec0662e2b9667e3ec8f15' && after.gte(before.add(r.minimumOutputWei))) {r.status='complete';r.destinationTxHash=destHash;r.message='Relay delivery confirmed and ETH received on Robinhood Chain.';}
+            if(payment && utils.keccak256(routerCode)==='0xde894e5c12e9513d50613c8fff375ecbf19b5d9a53bec0662e2b9667e3ec8f15' && after.gte(before.add(r.minimumOutputWei))) {deliveryProof={blockNumber:receipt.blockNumber,blockHash,parentHash:hash(parent.hash),txHash:destHash,to:receipt.to,from:receipt.from};}
           }
         } else if(result.status==='refund' || result.status==='failure') {
           r.status='unknown';r.message='Relay reported a refund or failure. Reconcile the recorded transaction before any further deposit.';
         }
       }
       await Promise.all([chain(p,1),chain(d,4663)]);
+      if(deliveryProof) {
+        // Number-tagged balance/runtime reads are accepted only while both blocks remain canonical.
+        // Recheck source and destination after every asynchronous proof read and before persistence.
+        const proof=deliveryProof;
+        const [block,parent,head,mined,sourceBlock,sourceHead]=await Promise.all([d.getBlock(proof.blockNumber),d.getBlock(proof.blockNumber-1),d.getBlockNumber(),d.getTransaction(proof.txHash),p.getBlock(receipt!.blockNumber),p.getBlockNumber()]);
+        if(!block || !parent || hash(block.hash)!==proof.blockHash || hash(parent.hash)!==proof.parentHash || hash(block.parentHash)!==proof.parentHash || !Number.isSafeInteger(head) || head<proof.blockNumber+1 ||
+          !mined || hash(mined.hash)!==proof.txHash || mined.chainId!==4663 || mined.blockNumber!==proof.blockNumber || hash(mined.blockHash)!==proof.blockHash || !same(mined.to,proof.to) || !same(mined.from,proof.from) ||
+          !sourceBlock || sourceBlock.hash!==receipt!.blockHash || !Number.isSafeInteger(sourceHead) || sourceHead<receipt!.blockNumber+1)throw Error();
+        r.status='complete';r.destinationTxHash=proof.txHash;r.message='Relay delivery confirmed and ETH received on Robinhood Chain.';
+      }
     } catch {r.status='unknown';r.message='Could not conclusively verify this bridge. Preserve the transaction hash and check again; do not resend.';}
     finally {p.removeAllListeners();d.removeAllListeners();}
     save(r);return publicOperation(r);
