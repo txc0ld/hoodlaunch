@@ -1,0 +1,58 @@
+import { account, accountConfigured, authClient, billingConfigured, customerFor, database, hasPro, stripeClient, takeQuota } from '../../src/server/public-services';
+import { digest, fail, jsonBody, origin, readToken, safeHandler, sessionCookie, sessionToken, writeGuard } from '../../src/server/public-security';
+
+export const config = { api: { bodyParser: false }, maxDuration: 60 };
+export default safeHandler(async (req, res) => {
+  writeGuard(req);
+  const body = await jsonBody(req);
+  const action = body.action;
+  if (action === 'status') {
+    if (!accountConfigured()) { res.json({ configured: false, signedIn: false, pro: false, billing: false }); return; }
+    const id = await account(req, false);
+    if (id) await takeQuota(`status:${id}`, 180, 3600);
+    res.json({ configured: true, signedIn: Boolean(id), pro: id ? await hasPro(id) : false, billing: billingConfigured() }); return;
+  }
+  if (action === 'request-code' || action === 'verify-code') {
+    database();
+    if (typeof body.email !== 'string' || body.email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) fail(400, 'EMAIL', 'Enter a valid email address.');
+    const email = body.email.trim().toLowerCase();
+    await takeQuota(`auth-global`, 1000, 3600);
+    await takeQuota(`${action}:${digest(email)}`, action === 'request-code' ? 3 : 8, 900);
+    const client = authClient();
+    if (action === 'request-code') {
+      const { error } = await client.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
+      if (error) fail(429, 'CODE_UNAVAILABLE', 'Unable to send a code right now. Please wait before trying again.');
+      res.json({ sent: true }); return;
+    }
+    if (typeof body.code !== 'string' || !/^\d{6,8}$/.test(body.code)) fail(400, 'CODE', 'Enter the code from your email.');
+    const { data, error } = await client.auth.verifyOtp({ email, token: body.code, type: 'email' });
+    if (error || !data.user?.id || !data.session) fail(401, 'CODE', 'Code is invalid or expired.');
+    // Supabase verifies the identity. Only our revocable opaque session reaches the browser.
+    const token = sessionToken();
+    const stored = await database().from('hood_sessions').insert({ token_hash: digest(token), user_id: data.user.id, expires_at: new Date(Date.now() + 3600000).toISOString() });
+    if (stored.error) fail(503, 'AUTH_UNAVAILABLE', 'Unable to start a session. Request a new code.');
+    sessionCookie(res, token); res.json({ signedIn: true }); return;
+  }
+  if (action === 'logout') {
+    const token = readToken(req);
+    if (token) { const { error } = await database().from('hood_sessions').delete().eq('token_hash', digest(token)); if (error) fail(503, 'LOGOUT_UNAVAILABLE', 'Unable to sign out. Please retry.'); }
+    sessionCookie(res, '', true); res.json({ signedIn: false }); return;
+  }
+  if (action === 'checkout' || action === 'portal') {
+    const id = (await account(req))!;
+    await takeQuota(`billing:${id}`, 10, 3600);
+    const stripe = stripeClient();
+    const customer = await customerFor(id, action === 'checkout');
+    if (!customer) fail(400, 'NO_BILLING', 'No subscription account exists yet.');
+    if (action === 'portal' || await hasPro(id)) {
+      const portal = await stripe.billingPortal.sessions.create({ customer, return_url: origin() + '/' });
+      res.json({ url: portal.url }); return;
+    }
+    const { data: key, error } = await database().rpc('hood_checkout_key', { p_user: id });
+    if (error || !key) fail(503, 'BILLING_UNAVAILABLE', 'Unable to prepare checkout.');
+    const session = await stripe.checkout.sessions.create({ mode: 'subscription', customer, client_reference_id: id, line_items: [{ price: process.env.STRIPE_PRO_PRICE_ID!, quantity: 1 }], subscription_data: { metadata: { hood_user_id: id } }, success_url: origin() + '/?billing=return', cancel_url: origin() + '/?billing=cancelled', allow_promotion_codes: false }, { idempotencyKey: `hood-checkout-${key}` });
+    if (!session.url) fail(409, 'CHECKOUT_EXPIRED', 'This checkout has finished. Refresh your account status or try again tomorrow.');
+    res.json({ url: session.url }); return;
+  }
+  fail(400, 'ACTION', 'Unknown account action.');
+});
