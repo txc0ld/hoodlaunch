@@ -27,7 +27,7 @@ export default function LabHero() {
         <p className={styles.lede}>Plan your token, check live PONS terms, and prepare a launch from one clear workspace. Your wallet stays in control.</p>
         <div className={styles.actions}>
           <a className={styles.primaryAction} href="#launch">Start a launch <span aria-hidden="true">↘</span></a>
-          <a className={styles.secondaryAction} href="#token-lab">Plan tokenomics</a>
+          <a className={styles.secondaryAction} href="#pons-plan">Plan your launch</a>
         </div>
         <dl className={styles.protocolStrip}>
           <div><dt>Launch</dt><dd>Free</dd></div><div><dt>Gas</dt><dd>Native ETH</dd></div><div><dt>Keys</dt><dd>Stay with you</dd></div>
@@ -51,7 +51,7 @@ export default function LabHero() {
     </div>
     <section className={styles.routes} aria-labelledby="routes-title">
       <div className={styles.routesIntro}><p>ONE WORKSPACE / THREE MOVES</p><h2 id="routes-title">What can I do here?</h2></div>
-      <a href="#token-lab"><span>01</span><strong>Plan</strong><p>Test supply, allocation and fee assumptions locally. Pro adds vesting comparisons.</p><i>Open Token Lab →</i></a>
+      <a href="#pons-plan"><span>01</span><strong>Plan</strong><p>Use PONS supply and fees to set your creator tax and initial buy.</p><i>Open launch plan →</i></a>
       <a href="#launch"><span>02</span><strong>Launch</strong><p>Build a token and review current PONS terms before your wallet signs.</p><i>Prepare a launch →</i></a>
       <a href="/pro" target="_blank" rel="noopener noreferrer"><span>03</span><strong>Scale</strong><p>Unlock managed uploads and the generated-wallet workspace with Pro.</p><i>Compare access →</i></a>
     </section>

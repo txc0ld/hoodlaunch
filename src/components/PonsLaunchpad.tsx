@@ -486,7 +486,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
       <a className={styles.skipLink} href="#launch">Skip to launch workspace</a>
       <nav className={styles.nav} aria-label="Primary navigation">
         <a className={styles.brand} href="https://labs.hoodrich.rip" target="_blank" rel="noreferrer" aria-label="Open HOODLABS website"><span className={styles.brandMark}>H</span><span>HOODLABS<small>BY HOODRICH</small></span></a>
-        <div className={styles.navLinks}><a href="#launch"><span>01</span>Launch</a><a href="#token-lab"><span>02</span>Plan</a><a href="#pair-research"><span>03</span>Choose pair</a></div>
+        <div className={styles.navLinks}><a href="#launch"><span>01</span>Launch</a><a href="#pons-plan"><span>02</span>Plan</a><a href="#pair-research"><span>03</span>Choose pair</a></div>
         <div className={styles.walletControls}>
         {wallet ? (
           <button className={styles.walletButton} type="button" onClick={wrongChain ? handleSwitch : undefined} disabled={walletBusy}>
