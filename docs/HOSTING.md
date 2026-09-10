@@ -63,3 +63,14 @@ Key principle: publish the reviewed app independently, then enable paid financia
 ### Free wallet generation allowance (staged)
 
 `NODE_GENERATION_ENABLED=false` keeps the new account allowance endpoint closed. Migration `db/004_node_generation.sql` adds service-only attempt/cooldown records; apply only after its independent migration checks pass. This backend alone does not enable public wallet generation. The separate vault recovery/session integration and account sign-in must be ready first. The Free allowance is one authorized attempt per account per rolling 24 hours; Pro may request up to 50 wallets per attempt. Do not remove the existing financial gates to expose generation.
+
+
+## Wallet account sign-in
+
+`WALLET_SIGNIN_ENABLED` defaults to `false`. Before enabling it, apply the independently reviewed `db/005_wallet_signin.sql`, enable Supabase Ethereum Web3 authentication, retain the canonical root redirect URI, and verify actual native identities with disposable wallets. Wallet sign-in uses an ECDSA ownership message, not a transaction. EIP1271 contract-wallet signatures are not supported. Native Supabase tokens remain on the server; the browser receives the existing opaque HttpOnly session.
+
+Migration005 also coordinates email sign-in and logout. Deploy it before the updated account endpoint, even when wallet sign-in remains disabled. It requires no migration of existing users, holder links, billing accounts or sessions. Wallet and email accounts stay separate; users must keep their original sign-in method for existing subscriptions. A wallet account must still complete the holding-wallet proof to receive holder/grant access.
+
+The browser retains only random pending sign-in IDs as revocation handles, until completion or confirmed cancellation. Canceling can revoke only that attempt's session. On uncertain results, account tools remain locked until cancellation is confirmed. Keep these IDs out of logs and URLs. The challenge/session records retain their revocation linkage for24 hours; cleanup is bounded on authentication operations. No private keys, native Auth tokens or signatures are stored in those records.
+
+Wallet account signup is not proof of a unique person. A per-account Free allowance can be bypassed by creating additional accounts; do not advertise it as a per-person guarantee. Native Auth rate limits and application admission quotas remain in force. Physical mobile handoff must be tested separately. Enabling account sign-in does not enable wallet generation or financial operations.

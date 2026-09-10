@@ -90,6 +90,7 @@ function accountRoute(services = {}, checkout = {}, clock = require('node:perf_h
   return load('pages/api/account.ts', {
     'node:perf_hooks': { performance: clock },
     '../../src/server/public-services': { ...baseServices, ...services },
+    './public-services': { ...baseServices, ...services },
     '../../src/server/public-security': security,
     '../../src/server/public-checkout': {
       billingPortal: async () => 'https://billing.stripe.com/session/test',
@@ -171,14 +172,13 @@ test('enabled OTP paths retain provider verification and opaque session creation
   const route = accountRoute({
     emailSignInEnabled: () => true,
     database: () => ({
-      from: () => ({
-        insert: async row => {
-          calls.insert++;
-          assert.equal(row.user_id, 'user-1');
-          assert.match(row.token_hash, /^[a-f0-9]{64}$/);
-          return { error: null };
-        },
-      }),
+      rpc: async (name,args) => {
+        assert.equal(name,'hood_auth_attempt');
+        if(args.p_action==='begin')return {data:{started:true}};
+        assert.equal(args.p_action,'finish');calls.insert++;
+        assert.equal(args.p_payload.userId,'user-1');assert.match(args.p_payload.sessionHash,/^[a-f0-9]{64}$/);
+        return {data:{signedIn:true}};
+      },
     }),
     takeQuota: async () => { calls.quota++; },
     authClient: () => ({
@@ -197,10 +197,10 @@ test('enabled OTP paths retain provider verification and opaque session creation
   await route(request({ action: 'request-code', email: 'Person@Example.com' }), res);
   assert.equal(res.body.sent, true);
   res = response();
-  await route(request({ action: 'verify-code', email: 'Person@Example.com', code: '123456' }), res);
+  await route(request({ action: 'verify-code', email: 'Person@Example.com', code: '123456', requestId:'11111111-1111-4111-8111-111111111111',requestStartedAt:new Date().toISOString() },{cookie:'hood-auth-binding='+'a'.repeat(64)}), res);
   assert.equal(res.body.signedIn, true);
   assert.match(res.headers['Set-Cookie'], /^hood-session=[a-f0-9]{64};/);
-  assert.deepEqual(calls, { quota: 4, send: 1, verify: 1, insert: 1 });
+  assert.deepEqual(calls, { quota: 5, send: 1, verify: 1, insert: 1 });
 });
 
 test('disabled email readiness does not block logout or an existing billing portal', async () => {
@@ -208,7 +208,7 @@ test('disabled email readiness does not block logout or an existing billing port
   let res = response();
   await accountRoute({
     emailSignInEnabled: () => false,
-    database: () => ({ from: () => ({ delete: () => ({ eq: async () => { deleted = true; return { error: null }; } }) }) }),
+    database: () => ({ rpc: async (name,args) => { assert.equal(name,'hood_auth_attempt');assert.equal(args.p_action,'logout');deleted=true;return {data:{canceled:true}}; } }),
   })(request({ action: 'logout' }, { cookie: `${security.cookieName()}=${'b'.repeat(64)}` }), res);
   assert.equal(deleted, true);
   assert.match(res.headers['Set-Cookie'], /Max-Age=0/);

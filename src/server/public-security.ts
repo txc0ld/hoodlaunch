@@ -32,8 +32,12 @@ export function readToken(req: NextApiRequest) {
   const token = entries[0].slice(name.length + 1);
   return /^[a-f0-9]{64}$/.test(token) ? token : null;
 }
+export function appendCookie(res: NextApiResponse, value: string) {
+  const existing = res.getHeader?.('Set-Cookie');
+  res.setHeader('Set-Cookie', existing ? [...(Array.isArray(existing) ? existing.map(String) : [String(existing)]), value] : value);
+}
 export function sessionCookie(res: NextApiResponse, token: string, clear = false) {
-  res.setHeader('Set-Cookie', `${cookieName()}=${clear ? '' : token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${clear ? 0 : 3600}${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
+  appendCookie(res, `${cookieName()}=${clear ? '' : token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${clear ? 0 : 3600}${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
 }
 export async function readBody(req: NextApiRequest, limit = 8192): Promise<Buffer> {
   const length = req.headers['content-length'];

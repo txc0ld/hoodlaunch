@@ -18,7 +18,7 @@ test.after(()=>{if(original===undefined)delete process.env.APP_ORIGIN;else proce
 function request(body={},extra={}) { const req=new PassThrough();req.method='POST';req.rawHeaders=['Origin','https://launch.example.com'];req.headers={origin:'https://launch.example.com','content-type':'application/json',...extra};process.nextTick(()=>req.end(Buffer.from(JSON.stringify(body))));return req; }
 function response() { return {code:200,headers:{},setHeader(k,v){this.headers[k]=v;},status(n){this.code=n;return this;},json(body){this.body=body;}}; }
 const baseServices={accountConfigured:()=>true,emailSignInEnabled:()=>false,billingConfigured:()=>false,account:async()=>null,getBillingAccountStatus:async()=>({billingAccount:false,billingAccountUnavailable:false}),takeQuota:async()=>{},hasPro:async()=>false};
-function accountRoute(services={}) {return load('pages/api/account.ts',{'../../src/server/public-services':{...baseServices,...services},'../../src/server/public-security':security}).default;}
+function accountRoute(services={}) {return load('pages/api/account.ts',{'../../src/server/public-services':{...baseServices,...services},'./public-services':{...baseServices,...services},'../../src/server/public-security':security}).default;}
 test('wrong/missing/duplicate origin fails before account service',async()=>{
  let calls=0;const handler=accountRoute({account:async()=>{calls++;return 'attacker';}});
  for(const origin of ['https://evil.test',undefined,'https://launch.example.com.evil.test']) {const req=request({action:'status'},{origin});const res=response();await handler(req,res);assert.equal(res.code,403);}
@@ -42,7 +42,7 @@ test('opaque cookies must be exactly one valid token',()=>{
  assert.notEqual(security.digest(token),token);assert.equal(security.sessionToken().length,64);
 });
 test('logout revokes server session before cookie removal and fails closed on DB errors',async()=>{
- let hash; const route=accountRoute({database:()=>({from:()=>({delete:()=>({eq:async(k,v)=>{hash=v;return {error:null};}})})})});
+ let hash; const route=accountRoute({database:()=>({rpc:async(name,args)=>{assert.equal(name,'hood_auth_attempt');assert.equal(args.p_action,'logout');hash=args.p_payload.sessionHash;return {data:{canceled:true}};}})});
  const res=response();await route(request({action:'logout'},{cookie:`${security.cookieName()}=${'a'.repeat(64)}`}),res);assert.equal(hash,security.digest('a'.repeat(64)));assert.match(res.headers['Set-Cookie'],/Max-Age=0/);
 });
 test('upstream sensitive errors are redacted',async()=>{

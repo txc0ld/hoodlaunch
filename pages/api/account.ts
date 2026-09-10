@@ -1,9 +1,10 @@
+import { beginAuthAttempt, cancelAuthAttempt, finishAuthAttempt, logoutAuthAttempts, prepareAuthBinding, strictAuthBody, verifyWalletSignIn, walletChallenge, walletSignInEnabled } from '../../src/server/public-wallet-signin';
 import { performance } from 'node:perf_hooks';
 import { holderChallenge, verifyHolder, unlinkHolder } from '../../src/server/public-holder';
 import { EMPTY_PRO_ACCESS } from '../../src/lib/pro-access';
 import { billingPortal, subscriptionCheckout } from '../../src/server/public-checkout';
 import { account, accountConfigured, authClient, billingConfigured, customerFor, database, emailSignInEnabled, getBillingAccountStatus, getProStatus, hasSubscription, stripeClient, takeQuota } from '../../src/server/public-services';
-import { digest, publicSessionIdentity, fail, jsonBody, origin, readToken, safeHandler, sessionCookie, sessionToken, writeGuard } from '../../src/server/public-security';
+import { digest, publicSessionIdentity, fail, jsonBody, origin, readToken, safeHandler, sessionCookie, writeGuard } from '../../src/server/public-security';
 
 export const config = { api: { bodyParser: false }, maxDuration: 60 };
 export default safeHandler(async (req, res) => {
@@ -17,8 +18,16 @@ export default safeHandler(async (req, res) => {
     if (id) await takeQuota(`status:${id}`, 180, 3600);
     const token=readToken(req);
     const [status,billingAccount]=id && token?await Promise.all([getProStatus(id,digest(token)),getBillingAccountStatus(id, Math.max(0, 17000 - (performance.now() - startedAt)))]):[EMPTY_PRO_ACCESS,{billingAccount:false,billingAccountUnavailable:false}];
-    res.json({...status, ...billingAccount, sessionIdentity: id && token ? publicSessionIdentity(token) : null, configured: true, signInAvailable: emailSignInEnabled(), signedIn: Boolean(id), billing: billingConfigured() }); return;
+    res.json({...status, ...billingAccount, sessionIdentity: id && token ? publicSessionIdentity(token) : null, configured: true, signInAvailable: emailSignInEnabled(), walletSignInAvailable: walletSignInEnabled(), signedIn: Boolean(id), billing: billingConfigured() }); return;
   }
+  if (action === 'auth-prepare') {
+    strictAuthBody(body, []);
+    if (!accountConfigured() || (!emailSignInEnabled() && !walletSignInEnabled())) fail(503, 'SIGN_IN_UNAVAILABLE', 'Account sign-in is temporarily unavailable.');
+    prepareAuthBinding(req,res); res.json({prepared:true}); return;
+  }
+  if (action === 'auth-cancel') { strictAuthBody(body,['challengeId']); await cancelAuthAttempt(body.challengeId); res.json({canceled:true}); return; }
+  if (action === 'wallet-signin-challenge') { res.json(await walletChallenge(req,body)); return; }
+  if (action === 'wallet-signin-verify') { await verifyWalletSignIn(req,res,body); res.json({signedIn:true}); return; }
   if (action === 'holder-challenge' || action === 'holder-verify' || action === 'holder-unlink') {
     const id=(await account(req))!,token=readToken(req);if(!token)fail(401,'SIGN_IN','Sign in to verify holder access.');
     await takeQuota(`${action}:${id}`,action==='holder-verify'?20:10,900);
@@ -41,17 +50,16 @@ export default safeHandler(async (req, res) => {
       res.json({ sent: true }); return;
     }
     if (typeof body.code !== 'string' || !/^\d{6,8}$/.test(body.code)) fail(400, 'CODE', 'Enter the code from your email.');
+    strictAuthBody(body,['email','code','requestId','requestStartedAt']);
+    const attempt = await beginAuthAttempt(req,body,'email');
     const { data, error } = await client.auth.verifyOtp({ email, token: body.code, type: 'email' });
     if (error || !data.user?.id || !data.session) fail(401, 'CODE', 'Code is invalid or expired.');
     // Supabase verifies the identity. Only our revocable opaque session reaches the browser.
-    const token = sessionToken();
-    const stored = await database().from('hood_sessions').insert({ token_hash: digest(token), user_id: data.user.id, expires_at: new Date(Date.now() + 3600000).toISOString() });
-    if (stored.error) fail(503, 'AUTH_UNAVAILABLE', 'Unable to start a session. Request a new code.');
-    sessionCookie(res, token); res.json({ signedIn: true }); return;
+    await finishAuthAttempt(req,res,attempt.id,data.user.id); res.json({ signedIn: true }); return;
   }
   if (action === 'logout') {
     const token = readToken(req);
-    if (token) { const { error } = await database().from('hood_sessions').delete().eq('token_hash', digest(token)); if (error) fail(503, 'LOGOUT_UNAVAILABLE', 'Unable to sign out. Please retry.'); }
+    await logoutAuthAttempts(req,token ? digest(token) : null);
     sessionCookie(res, '', true); res.json({ signedIn: false }); return;
   }
   if (action === 'checkout' || action === 'portal') {
