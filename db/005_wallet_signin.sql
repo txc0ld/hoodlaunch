@@ -74,6 +74,9 @@ begin
  if token is null or token !~ '^[0-9a-f]{64}$' or uid is null then raise exception 'invalid session'; end if;
  insert into public.hood_sessions(token_hash,user_id,expires_at) values(token,uid,t+interval '1 hour');
  update public.hood_auth_attempts set state='complete',issued_session_hash=token where id=p_id;
+ -- FK/row writes can wait after admission. Roll back BOTH publication writes if
+ -- that wait consumed the challenge lifetime; the earlier claim stays spent.
+ if a.expires_at<=clock_timestamp() then raise exception 'authentication attempt expired during publication'; end if;
  return jsonb_build_object('signedIn',true);
 end $$;
 revoke all on function public.hood_auth_attempt(text,uuid,text,jsonb) from public,anon,authenticated;
