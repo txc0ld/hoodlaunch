@@ -1,0 +1,612 @@
+import { ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { utils } from "ethers";
+import {
+  connectWallet,
+  executePreparedLaunch,
+  getProtocolState,
+  onWalletChange,
+  PonsSubmissionError,
+  PONS_EXPLORER,
+  prepareLaunch,
+  refreshWallet,
+  switchToPons,
+} from "../lib/pons";
+import type { LaunchDraft, LaunchReceipt, PreparedLaunch, ProtocolState, WalletState } from "../lib/pons-types";
+import type { NodeSession } from "../lib/node-vault";
+import NodeManager from "./NodeManager";
+import NodeTrading from "./NodeTrading";
+import styles from "./PonsLaunchpad.module.css";
+
+const PONS_CHAIN_ID = 4663;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const OPERATION_KEY = "pons-v2:launch-operation";
+
+const EMPTY_DRAFT: LaunchDraft = {
+  name: "",
+  symbol: "",
+  description: "",
+  logo: "",
+  twitter: "",
+  telegram: "",
+  website: "",
+  discord: "",
+  farcaster: "",
+  configId: "",
+  developerBuyEth: "0",
+  creatorFeeRecipient: "",
+  creatorTaxBps: 0,
+  buybackEnabled: false,
+  slippageBps: 100,
+  exemptions: [],
+};
+
+type ImageState = "idle" | "uploading" | "uploaded" | "error";
+type SubmitState = "idle" | "preparing" | "review" | "submitting" | "pending" | "unknown" | "success" | "error";
+interface StoredOperation { id: string; account: string; chainId: number; createdAt: number; hash?: string; }
+
+function Icon({ name }: { name: "image" | "wallet" | "chevron" | "check" | "external" | "close" | "spinner" }) {
+  const common = { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
+  if (name === "image") return <svg {...common}><rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="9" cy="10" r="1.5" /><path d="m5 17 4-4 3 3 2-2 5 5" /></svg>;
+  if (name === "wallet") return <svg {...common}><path d="M4 7.5h15a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-11a2 2 0 0 1 2-2h12" /><path d="M16 12h5v4h-5a2 2 0 0 1 0-4Z" /></svg>;
+  if (name === "chevron") return <svg {...common}><path d="m7 10 5 5 5-5" /></svg>;
+  if (name === "check") return <svg {...common}><path d="m5 12 4 4L19 6" /></svg>;
+  if (name === "external") return <svg {...common}><path d="M14 4h6v6M20 4l-9 9" /><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6" /></svg>;
+  if (name === "close") return <svg {...common}><path d="m6 6 12 12M18 6 6 18" /></svg>;
+  return <svg {...common} className={styles.spin}><circle cx="12" cy="12" r="9" opacity=".25" /><path d="M21 12a9 9 0 0 0-9-9" /></svg>;
+}
+
+function formatEth(wei?: string) {
+  if (!wei) return "—";
+  try {
+    return utils.formatEther(wei);
+  } catch {
+    return "—";
+  }
+}
+
+function formatTokenSupply(wei?: string) {
+  if (!wei) return "—";
+  try {
+    return utils.commify(utils.formatUnits(wei, 18));
+  } catch {
+    return "—";
+  }
+}
+
+function formatPoolFee(poolFee?: number) {
+  if (poolFee === undefined) return "—";
+  return (poolFee & 8388608) === 8388608 ? "Dynamic" : `${poolFee / 10000}%`;
+}
+
+function shorten(value: string, head = 6, tail = 4) {
+  return value.length > head + tail + 3 ? `${value.slice(0, head)}…${value.slice(-tail)}` : value;
+}
+
+function errorMessage(error: unknown) {
+  if (typeof error === "object" && error && "code" in error && (error as { code?: number }).code === 4001) return "Request rejected in your wallet.";
+  if (error instanceof Error) return error.message;
+  return "Something went wrong. Please try again.";
+}
+
+function parseStoredOperation(raw: string): StoredOperation | null {
+  try {
+    const operation = JSON.parse(raw) as Partial<StoredOperation>;
+    if (typeof operation.id === "string" && operation.id && typeof operation.account === "string" && operation.account && operation.chainId === PONS_CHAIN_ID && Number.isFinite(operation.createdAt)) return operation as StoredOperation;
+  } catch { /* Invalid markers still block launching. */ }
+  return null;
+}
+
+function removeOwnedOperation(id: string): StoredOperation | null {
+  try {
+    const raw = window.localStorage.getItem(OPERATION_KEY);
+    if (!raw) return null;
+    const current = raw ? parseStoredOperation(raw) : null;
+    if (current?.id === id) {
+      window.localStorage.removeItem(OPERATION_KEY);
+      return null;
+    }
+    return current || { id: "invalid", account: "Unknown", chainId: PONS_CHAIN_ID, createdAt: Date.now() };
+  } catch {
+    return { id: "invalid", account: "Unknown", chainId: PONS_CHAIN_ID, createdAt: Date.now() };
+  }
+}
+
+function normalizeSocialUrl(value: string, host?: string) {
+  const clean = value.trim();
+  if (!clean) return "";
+  if (/^https:\/\//i.test(clean)) return clean;
+  const withoutScheme = clean.replace(/^https?:\/\//i, "").replace(/^@/, "");
+  return `https://${host && !withoutScheme.includes(".") ? `${host}/${withoutScheme}` : withoutScheme}`;
+}
+
+export default function PonsLaunchpad() {
+  const [protocol, setProtocol] = useState<ProtocolState | null>(null);
+  const [protocolError, setProtocolError] = useState("");
+  const [protocolLoading, setProtocolLoading] = useState(true);
+  const [wallet, setWallet] = useState<WalletState | null>(null);
+  const [walletBusy, setWalletBusy] = useState(false);
+  const [walletError, setWalletError] = useState("");
+  const [draft, setDraft] = useState<LaunchDraft>(EMPTY_DRAFT);
+  const [advanced, setAdvanced] = useState(false);
+  const [exemptionText, setExemptionText] = useState("");
+  const [imageState, setImageState] = useState<ImageState>("idle");
+  const [imageError, setImageError] = useState("");
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [selectedImage, setSelectedImage] = useState<File | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [prepared, setPrepared] = useState<PreparedLaunch | null>(null);
+  const [submitState, setSubmitState] = useState<SubmitState>("idle");
+  const [submitError, setSubmitError] = useState("");
+  const [txHash, setTxHash] = useState("");
+  const [receipt, setReceipt] = useState<LaunchReceipt | null>(null);
+  const [storedOperation, setStoredOperation] = useState<StoredOperation | null>(null);
+  const [nodeSession, setNodeSession] = useState<NodeSession | null>(null);
+  const uploadSequence = useRef(0);
+  const uploadController = useRef<AbortController | null>(null);
+  const fileInput = useRef<HTMLInputElement | null>(null);
+  const modalRef = useRef<HTMLElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const wasModalOpenRef = useRef(false);
+  const reviewButtonRef = useRef<HTMLButtonElement | null>(null);
+  const prepareGeneration = useRef(0);
+
+  const invalidateReview = useCallback(() => {
+    prepareGeneration.current += 1;
+    setPrepared(null);
+    setSubmitError("");
+    setSubmitState((current) => current === "review" || current === "preparing" || current === "error" ? "idle" : current);
+  }, []);
+
+  const updateDraft = useCallback(<K extends keyof LaunchDraft>(key: K, value: LaunchDraft[K]) => {
+    invalidateReview();
+    setDraft((current) => ({ ...current, [key]: value }));
+  }, [invalidateReview]);
+
+  const loadProtocol = useCallback(async () => {
+    setProtocolLoading(true);
+    setProtocolError("");
+    try {
+      const next = await getProtocolState();
+      setProtocol(next);
+      setDraft((current) => current.configId || !next.configs.length ? current : { ...current, configId: next.configs.find((config) => config.enabled)?.id || "" });
+    } catch (error) {
+      setProtocolError(errorMessage(error));
+    } finally {
+      setProtocolLoading(false);
+    }
+  }, []);
+
+  const reloadWallet = useCallback(async (showError = false) => {
+    try {
+      const next = await refreshWallet();
+      setWallet(next);
+      if (showError) setWalletError("");
+    } catch (error) {
+      setWallet(null);
+      if (showError) setWalletError(errorMessage(error));
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadProtocol();
+    void reloadWallet(false);
+    let raw: string | null = null;
+    try { raw = window.localStorage.getItem(OPERATION_KEY); } catch { /* The send callback verifies persistence before submitting. */ }
+    if (raw) {
+      const operation = parseStoredOperation(raw) || { id: "invalid", account: "Unknown", chainId: PONS_CHAIN_ID, createdAt: Date.now() };
+      setStoredOperation(operation);
+      setTxHash(operation.hash || "");
+      setSubmitState("unknown");
+    }
+  }, [loadProtocol, reloadWallet]);
+
+  useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== OPERATION_KEY) return;
+      invalidateReview();
+      if (!event.newValue) {
+        setStoredOperation(null);
+        setTxHash("");
+        setSubmitState((current) => current === "unknown" ? "idle" : current);
+        return;
+      }
+      const operation = parseStoredOperation(event.newValue) || { id: "invalid", account: "Unknown", chainId: PONS_CHAIN_ID, createdAt: Date.now() };
+      setStoredOperation(operation);
+      setTxHash(operation.hash || "");
+      setSubmitState("unknown");
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, [invalidateReview]);
+
+  useEffect(() => {
+    return onWalletChange(() => {
+      invalidateReview();
+      void reloadWallet(false);
+      void loadProtocol();
+    });
+  }, [invalidateReview, loadProtocol, reloadWallet]);
+
+  useEffect(() => () => uploadController.current?.abort(), []);
+  useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
+  const modalOpen = ["review", "submitting", "pending", "success"].includes(submitState);
+  useEffect(() => {
+    if (modalOpen) {
+      if (!previousFocusRef.current && document.activeElement instanceof HTMLElement) previousFocusRef.current = document.activeElement;
+      const firstControl = modalRef.current?.querySelector<HTMLElement>("button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])");
+      (firstControl || modalRef.current)?.focus();
+      wasModalOpenRef.current = true;
+      return;
+    }
+    if (wasModalOpenRef.current) {
+      const focusTarget = previousFocusRef.current?.isConnected ? previousFocusRef.current : reviewButtonRef.current;
+      focusTarget?.focus();
+      previousFocusRef.current = null;
+      wasModalOpenRef.current = false;
+    }
+  }, [modalOpen, submitState]);
+
+  const continueToNodeTrading = useCallback(() => {
+    setPrepared(null);
+    setSubmitError("");
+    setSubmitState("idle");
+    window.requestAnimationFrame(() => {
+      const trading = document.getElementById("node-trading");
+      trading?.focus();
+      trading?.scrollIntoView({ block: "start" });
+    });
+  }, []);
+
+  const handleModalKeyDown = useCallback((event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key === "Escape" && (submitState === "review" || submitState === "success")) {
+      if (submitState === "success") continueToNodeTrading();
+      else invalidateReview();
+      return;
+    }
+    if (event.key !== "Tab" || !modalRef.current) return;
+    const controls = Array.from(modalRef.current.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])"));
+    if (!controls.length) {
+      event.preventDefault();
+      modalRef.current.focus();
+      return;
+    }
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (!controls.includes(document.activeElement as HTMLElement)) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    } else if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }, [continueToNodeTrading, invalidateReview, submitState]);
+
+  const selectedConfig = useMemo(() => protocol?.configs.find((config) => config.id === draft.configId), [draft.configId, protocol]);
+  const exemptions = useMemo(() => exemptionText.split(/[\n,]/).map((value) => value.trim()).filter(Boolean), [exemptionText]);
+
+  const validationError = useMemo(() => {
+    if (!draft.name.trim()) return "Enter a token name.";
+    if (draft.name.trim().length > 64) return "Token name must be 64 characters or fewer.";
+    if (!draft.symbol.trim()) return "Enter a ticker.";
+    if (draft.symbol.trim().length > 16) return "Ticker must be 16 characters or fewer.";
+    if (!/^[A-Za-z0-9]+$/.test(draft.symbol.trim())) return "Ticker may contain only letters and numbers.";
+    if (draft.description.length > 280) return "Description must be 280 characters or fewer.";
+    if (!draft.logo) return imageState === "uploading" ? "Wait for the image upload to finish." : "Upload a token image.";
+    if (!selectedConfig?.enabled) return "Choose an available launch configuration.";
+    if (!/^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/.test(draft.developerBuyEth)) return "Developer buy must be a non-negative ETH amount with up to 18 decimals.";
+    if (draft.creatorFeeRecipient && !utils.isAddress(draft.creatorFeeRecipient)) return "Enter a valid fee recipient address.";
+    if (draft.creatorTaxBps < 0 || draft.creatorTaxBps > (protocol?.maxCreatorTaxBps ?? 0)) return `Creator tax must be between 0 and ${(protocol?.maxCreatorTaxBps ?? 0) / 100}%.`;
+    if (draft.slippageBps < 0 || draft.slippageBps > 500) return "Slippage must be between 0% and 5%.";
+    if (exemptions.length > 32) return "Use no more than 32 exemptions.";
+    if (exemptions.some((address) => !utils.isAddress(address))) return "Every exemption must be a valid address.";
+    if (new Set(exemptions.map((address) => address.toLowerCase())).size !== exemptions.length) return "Remove duplicate exemption addresses.";
+    for (const [label, value] of [["Website", draft.website], ["Discord", draft.discord], ["Farcaster", draft.farcaster]] as const) {
+      if (value && !/^https:\/\//i.test(value)) return `${label} must start with https://.`;
+    }
+    return "";
+  }, [draft, exemptions, imageState, protocol, selectedConfig]);
+
+  const uploadImage = useCallback(async (file: File) => {
+    if (!IMAGE_TYPES.has(file.type)) {
+      setImageState("error");
+      setImageError("Choose a PNG, JPEG, or WebP image.");
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      setImageState("error");
+      setImageError("Image must be 5 MB or smaller.");
+      return;
+    }
+    const sequence = ++uploadSequence.current;
+    uploadController.current?.abort();
+    const controller = new AbortController();
+    uploadController.current = controller;
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(URL.createObjectURL(file));
+    setSelectedImage(file);
+    setImageState("uploading");
+    setImageError("");
+    updateDraft("logo", "");
+    try {
+      const response = await fetch("/api/token-image", { method: "POST", headers: { "Content-Type": file.type }, body: file, signal: controller.signal });
+      const payload = await response.json() as { uri?: string; cid?: string; gatewayUrl?: string; error?: string };
+      if (!response.ok || !payload.uri) throw new Error(payload.error || "Image upload failed.");
+      if (sequence !== uploadSequence.current) return;
+      updateDraft("logo", payload.uri);
+      setImageState("uploaded");
+    } catch (error) {
+      if (controller.signal.aborted || sequence !== uploadSequence.current) return;
+      setImageState("error");
+      setImageError(errorMessage(error));
+    }
+  }, [previewUrl, updateDraft]);
+
+  const removeImage = useCallback(() => {
+    uploadSequence.current += 1;
+    uploadController.current?.abort();
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl("");
+    setSelectedImage(null);
+    setImageState("idle");
+    setImageError("");
+    updateDraft("logo", "");
+    if (fileInput.current) fileInput.current.value = "";
+  }, [previewUrl, updateDraft]);
+
+  async function handleConnect() {
+    setWalletBusy(true);
+    setWalletError("");
+    try {
+      setWallet(await connectWallet());
+    } catch (error) {
+      setWalletError(errorMessage(error));
+    } finally {
+      setWalletBusy(false);
+    }
+  }
+
+  async function handleSwitch() {
+    setWalletBusy(true);
+    setWalletError("");
+    try {
+      setWallet(await switchToPons());
+      await loadProtocol();
+    } catch (error) {
+      setWalletError(errorMessage(error));
+    } finally {
+      setWalletBusy(false);
+    }
+  }
+
+  async function handlePrepare() {
+    if (!wallet || validationError || imageState !== "uploaded") return;
+    if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) previousFocusRef.current = document.activeElement;
+    const generation = prepareGeneration.current + 1;
+    prepareGeneration.current = generation;
+    const launchDraft = {
+      ...draft,
+      name: draft.name.trim(),
+      symbol: draft.symbol.trim().toUpperCase(),
+      description: draft.description.trim(),
+      twitter: normalizeSocialUrl(draft.twitter, "x.com"),
+      telegram: normalizeSocialUrl(draft.telegram, "t.me"),
+      exemptions,
+    };
+    setSubmitState("preparing");
+    setSubmitError("");
+    try {
+      const next = await prepareLaunch(launchDraft, wallet);
+      if (generation !== prepareGeneration.current) return;
+      setPrepared(next);
+      setSubmitState("review");
+    } catch (error) {
+      if (generation !== prepareGeneration.current) return;
+      setSubmitError(errorMessage(error));
+      setSubmitState("error");
+    }
+  }
+
+  async function handleExecute() {
+    if (!prepared || !wallet || submitState !== "review") return;
+    setSubmitState("submitting");
+    setSubmitError("");
+    let observedHash = "";
+    const operation: StoredOperation = { id: utils.hexlify(utils.randomBytes(16)), account: prepared.account, chainId: prepared.chainId, createdAt: Date.now() };
+    try {
+      const result = await executePreparedLaunch(prepared, wallet, (hash: string) => {
+        observedHash = hash;
+        const hashedOperation = { ...operation, hash };
+        setStoredOperation(hashedOperation);
+        try { window.localStorage.setItem(OPERATION_KEY, JSON.stringify(hashedOperation)); } catch { /* State still blocks this session. */ }
+        setTxHash(hash);
+        setSubmitState("pending");
+      }, () => {
+        // This callback runs after final validation and immediately before the wallet send.
+        // Failing closed prevents a send that cannot be remembered across a reload.
+        const existing = window.localStorage.getItem(OPERATION_KEY);
+        if (existing) {
+          const foreign = parseStoredOperation(existing) || { id: "invalid", account: "Unknown", chainId: PONS_CHAIN_ID, createdAt: Date.now() };
+          setStoredOperation(foreign);
+          setTxHash(foreign.hash || "");
+          throw new PonsSubmissionError("A launch transaction is pending in another tab.", "unknown");
+        }
+        window.localStorage.setItem(OPERATION_KEY, JSON.stringify(operation));
+        setStoredOperation(operation);
+      });
+      setReceipt(result);
+      setTxHash(result.transactionHash);
+      setStoredOperation(removeOwnedOperation(operation.id));
+      setSubmitState("success");
+    } catch (error) {
+      const message = errorMessage(error);
+      const submissionState = (error as { submissionState?: "not-submitted" | "unknown" | "reverted" } | null)?.submissionState;
+      setSubmitError(message);
+      if (submissionState === "not-submitted" || submissionState === "reverted") {
+        const remaining = removeOwnedOperation(operation.id);
+        setStoredOperation(remaining);
+        setTxHash(remaining?.hash || "");
+        setSubmitState(remaining ? "unknown" : "error");
+      } else {
+        setSubmitState("unknown");
+      }
+      if (!observedHash) setPrepared(null);
+    }
+  }
+
+  const wrongChain = Boolean(wallet && wallet.chainId !== PONS_CHAIN_ID);
+  const formBusy = ["preparing", "submitting", "pending", "unknown"].includes(submitState) || Boolean(storedOperation);
+  const mainAction = !wallet
+    ? { label: walletBusy ? "Connecting…" : "Connect wallet", action: handleConnect, disabled: walletBusy }
+    : wrongChain
+      ? { label: walletBusy ? "Switching…" : "Switch to PONS Mainnet", action: handleSwitch, disabled: walletBusy }
+      : !wallet.canLaunch
+        ? { label: "Wallet not eligible to launch", action: () => undefined, disabled: true }
+        : { label: storedOperation || submitState === "unknown" ? "Launch status unresolved" : submitState === "preparing" ? "Simulating launch…" : "Review launch", action: handlePrepare, disabled: Boolean(validationError || formBusy || protocolLoading || imageState !== "uploaded") };
+
+  return (
+    <main className={styles.page}>
+      <nav className={styles.nav} aria-label="Primary navigation">
+        <a className={styles.brand} href="https://www.ponsfamily.com" target="_blank" rel="noreferrer" aria-label="Open PONS Family website"><span className={styles.brandMark}>F</span><span>Forge</span></a>
+        <div className={styles.navCenter}><span className={styles.product}>PONS V2</span><span className={styles.networkDot} /> Mainnet</div>
+        {wallet ? (
+          <button className={styles.walletButton} type="button" onClick={wrongChain ? handleSwitch : undefined} disabled={walletBusy}>
+            <span className={wrongChain ? styles.badDot : styles.goodDot} />{wrongChain ? "Wrong network" : shorten(wallet.account)}
+          </button>
+        ) : <button className={styles.walletButton} type="button" onClick={handleConnect} disabled={walletBusy}><Icon name="wallet" />{walletBusy ? "Connecting…" : "Connect"}</button>}
+      </nav>
+
+      <NodeManager onSessionChange={setNodeSession} />
+
+      <section id="launch" className={styles.shell} aria-labelledby="launch-title">
+        <div className={styles.formPane}>
+          <div className={styles.headingRow}>
+            <div><p className={styles.eyebrow}>PONS V2 · ETH launch</p><h1 id="launch-title">Launch token</h1><p>Create a token on PONS Mainnet. Live terms are read from the protocol.</p></div>
+            <span className={styles.chainBadge}>Chain 4663</span>
+          </div>
+
+          {protocolError && <div className={styles.alert} role="alert"><span>{protocolError}</span><button type="button" onClick={loadProtocol}>Retry</button></div>}
+          {walletError && <div className={styles.alert} role="alert"><span>{walletError}</span><button type="button" onClick={() => setWalletError("")} aria-label="Dismiss wallet error"><Icon name="close" /></button></div>}
+          {wallet && !wrongChain && !wallet.canLaunch && <div className={styles.alert} role="status"><span>This account is not currently eligible to launch. Access was checked onchain.</span></div>}
+
+          <div className={styles.twoFields}>
+            <label className={styles.field}><span>Name</span><input value={draft.name} maxLength={64} onChange={(event) => updateDraft("name", event.target.value)} placeholder="Token name" autoComplete="off" /></label>
+            <label className={styles.field}><span>Ticker</span><input value={draft.symbol} maxLength={16} onChange={(event) => updateDraft("symbol", event.target.value.toUpperCase())} placeholder="SYMBOL" autoCapitalize="characters" autoComplete="off" /></label>
+          </div>
+          <label className={styles.field}><span>Description <small>{draft.description.length}/280</small></span><textarea value={draft.description} maxLength={280} onChange={(event) => updateDraft("description", event.target.value)} placeholder="A short description of the token" rows={3} /></label>
+
+          <div className={styles.field}>
+            <span>Token image</span>
+            <div
+              className={`${styles.dropzone} ${dragging ? styles.dragging : ""}`}
+              onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(event: DragEvent<HTMLDivElement>) => { event.preventDefault(); setDragging(false); const file = event.dataTransfer.files[0]; if (file) void uploadImage(file); }}
+            >
+              {previewUrl ? <img className={styles.imagePreview} src={previewUrl} alt="Selected token artwork preview" /> : <span className={styles.imagePlaceholder}><Icon name="image" /></span>}
+              <div className={styles.uploadCopy}>
+                <button type="button" className={styles.textButton} onClick={() => fileInput.current?.click()}>{previewUrl ? "Replace image" : "Choose image"}</button>
+                <small>PNG, JPEG or WebP · 5 MB max</small>
+                {imageState === "uploading" && <span className={styles.uploadStatus}><Icon name="spinner" /> Uploading securely…</span>}
+                {imageState === "uploaded" && <span className={styles.successText}><Icon name="check" /> Uploaded</span>}
+              </div>
+              {previewUrl && <button type="button" className={styles.removeImage} onClick={removeImage} aria-label="Remove token image"><Icon name="close" /></button>}
+              <input ref={fileInput} className={styles.hiddenInput} type="file" accept="image/png,image/jpeg,image/webp" onChange={(event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (file) void uploadImage(file); }} aria-label="Choose token image" />
+            </div>
+            {imageState === "error" && <div className={styles.inlineError} role="alert"><span>{imageError}</span>{selectedImage && <button type="button" onClick={() => void uploadImage(selectedImage)}>Retry upload</button>}</div>}
+          </div>
+
+          <div className={styles.twoFields}>
+            <label className={styles.field}><span>X profile</span><input value={draft.twitter} onChange={(event) => updateDraft("twitter", event.target.value)} placeholder="x.com/handle" autoComplete="url" /></label>
+            <label className={styles.field}><span>Telegram</span><input value={draft.telegram} onChange={(event) => updateDraft("telegram", event.target.value)} placeholder="t.me/community" autoComplete="url" /></label>
+          </div>
+
+          <label className={styles.field}><span>Website <small>optional</small></span><input type="url" value={draft.website} onChange={(event) => updateDraft("website", event.target.value)} placeholder="https://your-token.com" autoComplete="url" /><small>Your token’s official website, included in its PONS launch details.</small></label>
+
+          <label className={styles.field}><span>Launch configuration</span><span className={styles.selectWrap}><select value={draft.configId} onChange={(event) => updateDraft("configId", event.target.value)} disabled={protocolLoading || !protocol}><option value="">{protocolLoading ? "Loading live configurations…" : "Choose configuration"}</option>{protocol?.configs.filter((config) => config.enabled).map((config) => <option key={config.id} value={config.id}>{config.id} · ETH pair</option>)}</select><Icon name="chevron" /></span>{protocol && !protocolLoading && !protocol.configs.some((config) => config.enabled) && <small role="status">No launch configurations are currently enabled.</small>}</label>
+          <dl className={styles.configDetails} aria-label="Selected launch configuration terms">
+            <div><dt>Total supply</dt><dd>{formatTokenSupply(selectedConfig?.supplyWei)}</dd></div>
+            <div><dt>Pool fee</dt><dd>{formatPoolFee(selectedConfig?.poolFee)}</dd></div>
+            <div><dt>Liquidity</dt><dd>{selectedConfig ? "Permanent at graduation" : "—"}</dd></div>
+          </dl>
+
+          <label className={styles.field}><span>Developer buy <small>optional · ETH only</small></span><div className={styles.amountField}><input inputMode="decimal" value={draft.developerBuyEth} onChange={(event) => updateDraft("developerBuyEth", event.target.value)} aria-label="Developer buy in ETH" /><strong>ETH</strong></div><small>Bought in the launch transaction. Network gas is additional.</small></label>
+
+          <div className={styles.advancedBlock}>
+            <button className={styles.advancedToggle} type="button" onClick={() => setAdvanced((value) => !value)} aria-expanded={advanced}><span>Advanced</span><span className={advanced ? styles.chevronOpen : ""}><Icon name="chevron" /></span></button>
+            {advanced && <div className={styles.advancedFields}>
+              <label className={styles.field}><span>Fee recipient <small>defaults to connected wallet</small></span><input value={draft.creatorFeeRecipient} onChange={(event) => updateDraft("creatorFeeRecipient", event.target.value)} placeholder="0x…" autoComplete="off" /></label>
+              <div className={styles.twoFields}>
+                <label className={styles.field}><span>Creator tax (%)</span><input type="number" min="0" max={(protocol?.maxCreatorTaxBps ?? 0) / 100} step="0.01" value={draft.creatorTaxBps / 100} onChange={(event) => updateDraft("creatorTaxBps", Math.round(Number(event.target.value || 0) * 100))} /></label>
+                <label className={styles.field}><span>Slippage (%)</span><input type="number" min="0" max="5" step="0.01" value={draft.slippageBps / 100} onChange={(event) => updateDraft("slippageBps", Math.round(Number(event.target.value || 0) * 100))} /></label>
+              </div>
+              <label className={styles.checkField}><input type="checkbox" checked={draft.buybackEnabled} onChange={(event) => updateDraft("buybackEnabled", event.target.checked)} /><span><strong>Enable buyback</strong><small>Use the protocol’s configured buyback behavior.</small></span></label>
+              <div className={styles.twoFields}>
+                <label className={styles.field}><span>Discord</span><input value={draft.discord} onChange={(event) => updateDraft("discord", event.target.value)} placeholder="discord.gg/" autoComplete="url" /></label>
+              </div>
+              <label className={styles.field}><span>Farcaster</span><input value={draft.farcaster} onChange={(event) => updateDraft("farcaster", event.target.value)} placeholder="warpcast.com/" autoComplete="url" /></label>
+              <label className={styles.field}><span>Tax exemptions <small>{exemptions.length}/32 · one address per line</small></span><textarea value={exemptionText} onChange={(event) => { invalidateReview(); setExemptionText(event.target.value); }} placeholder="0x…" rows={3} /></label>
+            </div>}
+          </div>
+
+          <div className={styles.actionArea}>
+            {validationError && wallet && !wrongChain && <p className={styles.validationHint}>{validationError}</p>}
+            {submitState === "error" && <div className={styles.alert} role="alert"><span>{submitError}</span><button type="button" onClick={handlePrepare}>Retry</button></div>}
+            {submitState === "unknown" && <div className={styles.pendingNotice} role="status"><strong>Launch status is unresolved.</strong><span>Do not resubmit. Check your wallet{txHash ? " or the explorer" : " activity"} before taking any action.</span>{txHash && <><code>{txHash}</code><a href={`${PONS_EXPLORER}/tx/${txHash}`} target="_blank" rel="noreferrer">Check transaction <Icon name="external" /></a></>}</div>}
+            <div className={styles.feeLine}><span>ETH pair · live protocol fee</span><strong>{protocolLoading ? "Loading…" : `${formatEth(protocol?.launchFeeWei)} ETH`}</strong></div>
+            <button ref={reviewButtonRef} className={styles.primaryButton} type="button" onClick={mainAction.action} disabled={mainAction.disabled}>{mainAction.label}</button>
+          </div>
+        </div>
+
+        <aside className={styles.previewPane} aria-label="Token preview and live launch terms">
+          <div className={styles.previewCard}>
+            <div className={styles.previewImage}>{previewUrl ? <img src={previewUrl} alt="" /> : <Icon name="image" />}</div>
+            <h2>{draft.name.trim() || "Your token"}</h2>
+            <p className={styles.ticker}>{draft.symbol.trim() ? `$${draft.symbol.trim().toUpperCase()}` : "TICKER"}</p>
+            {draft.description && <p className={styles.previewDescription}>{draft.description}</p>}
+            <dl className={styles.terms}>
+              <div><dt>Launch fee</dt><dd>{protocolLoading ? "Loading…" : `${formatEth(protocol?.launchFeeWei)} ETH`}</dd></div>
+              <div><dt>Paired with</dt><dd>ETH</dd></div>
+              <div><dt>Trade fee</dt><dd>{selectedConfig ? `${(selectedConfig.curveFeeBps / 100).toFixed(2)}%` : "—"}</dd></div>
+              <div><dt>Total supply</dt><dd>{formatTokenSupply(selectedConfig?.supplyWei)}</dd></div>
+              <div><dt>Pool fee</dt><dd>{formatPoolFee(selectedConfig?.poolFee)}</dd></div>
+              {protocol?.snipeTaxBps !== undefined && <div><dt>Launch protection</dt><dd>{(protocol.snipeTaxBps / 100).toFixed(2)}% · {protocol.snipeWindowSeconds ?? 0}s</dd></div>}
+              <div><dt>Graduation</dt><dd>{selectedConfig ? `${formatEth(selectedConfig.graduationThresholdWei)} ETH` : "—"}</dd></div>
+              <div><dt>Liquidity</dt><dd>{selectedConfig ? "Permanent at graduation" : "—"}</dd></div>
+            </dl>
+            <div className={styles.trustNote}><span className={wallet?.canLaunch ? styles.goodDot : styles.neutralDot} /><p><strong>{wallet?.canLaunch ? "Wallet eligible" : "Eligibility checked on connect"}</strong><small>Audit status is not asserted by this interface. Verify deployed protocol addresses before launch.</small></p></div>
+          </div>
+        </aside>
+      </section>
+
+      <NodeTrading session={nodeSession} launchedTokenAddress={receipt?.tokenAddress || ""} />
+
+      {prepared && submitState === "review" && <div className={styles.modalBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) invalidateReview(); }}>
+        <section ref={modalRef} className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="review-title" tabIndex={-1} onKeyDown={handleModalKeyDown}>
+          <button className={styles.modalClose} type="button" onClick={invalidateReview} aria-label="Close launch review"><Icon name="close" /></button>
+          <p className={styles.eyebrow}>Final wallet confirmation follows</p><h2 id="review-title">Review launch</h2><p>Simulation succeeded. Check every value before submitting this transaction to PONS Mainnet.</p>
+          <dl className={styles.reviewList}>
+            <div><dt>Network</dt><dd>PONS Mainnet · 4663</dd></div>
+            <div><dt>Account</dt><dd title={prepared.account}>{shorten(prepared.account, 10, 8)}</dd></div>
+            <div><dt>Token</dt><dd>{prepared.name} · ${prepared.symbol}</dd></div>
+            <div><dt>Fee recipient</dt><dd title={prepared.creatorFeeRecipient}>{shorten(prepared.creatorFeeRecipient, 10, 8)}</dd></div>
+            <div><dt>Launch fee</dt><dd>{formatEth(prepared.launchFeeWei)} ETH</dd></div>
+            <div><dt>Developer buy</dt><dd>{formatEth(prepared.developerBuyWei)} ETH</dd></div>
+            <div><dt>Total value</dt><dd>{formatEth(prepared.totalValueWei)} ETH</dd></div>
+            <div><dt>Estimated gas</dt><dd>{formatEth(prepared.estimatedGasWei)} ETH</dd></div>
+            <div><dt>Minimum tokens out</dt><dd>{prepared.minTokensOut}</dd></div>
+            <div><dt>Economics</dt><dd>{prepared.expectedEconomics}</dd></div>
+          </dl>
+          <div className={styles.modalActions}><button type="button" className={styles.secondaryButton} onClick={invalidateReview}>Back to edit</button><button type="button" className={styles.primaryButton} onClick={handleExecute}>Confirm launch</button></div>
+        </section>
+      </div>}
+
+      {["submitting", "pending"].includes(submitState) && <div className={styles.modalBackdrop}><section ref={modalRef} className={`${styles.modal} ${styles.statusModal}`} role="status" aria-live="polite" tabIndex={-1} onKeyDown={handleModalKeyDown}><span className={styles.largeSpinner}><Icon name="spinner" /></span><h2>{submitState === "submitting" ? "Confirm in wallet" : "Launch pending"}</h2><p>{submitState === "submitting" ? "Review and approve the launch transaction in your wallet." : "Your transaction was submitted. Keep this page open while it confirms."}</p>{txHash && <code>{txHash}</code>}</section></div>}
+
+      {receipt && submitState === "success" && <div className={styles.modalBackdrop} onMouseDown={(event) => { if (event.target === event.currentTarget) continueToNodeTrading(); }}><section ref={modalRef} className={`${styles.modal} ${styles.statusModal}`} role="dialog" aria-modal="true" aria-labelledby="success-title" tabIndex={-1} onKeyDown={handleModalKeyDown}><span className={styles.successIcon}><Icon name="check" /></span><p className={styles.eyebrow}>Verified onchain</p><h2 id="success-title">Token launched</h2><p>Your token and bonding curve are live on PONS Mainnet.</p><dl className={styles.reviewList}><div><dt>Token</dt><dd><a href={`${PONS_EXPLORER}/address/${receipt.tokenAddress}`} target="_blank" rel="noreferrer">{shorten(receipt.tokenAddress, 10, 8)} <Icon name="external" /></a></dd></div><div><dt>Curve</dt><dd><a href={`${PONS_EXPLORER}/address/${receipt.curveAddress}`} target="_blank" rel="noreferrer">{shorten(receipt.curveAddress, 10, 8)} <Icon name="external" /></a></dd></div><div><dt>Transaction</dt><dd>{shorten(receipt.transactionHash, 10, 8)}</dd></div></dl><div className={styles.modalActions}><button className={styles.primaryButton} type="button" onClick={continueToNodeTrading}>Continue to node trading</button><a className={styles.secondaryButton} href={receipt.explorerUrl} target="_blank" rel="noreferrer">View verified transaction <Icon name="external" /></a></div></section></div>}
+    </main>
+  );
+}

@@ -1,0 +1,385 @@
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { BigNumber, utils } from "ethers";
+import {
+  createNodeSession,
+  encryptNodeBackup,
+  exportNodeKeystore,
+  forgetNodeSession,
+  isVerifiedNodeSession,
+  MAX_NODES,
+  restoreNodeBackup,
+} from "../lib/node-vault";
+import type { NodeSession } from "../lib/node-vault";
+import { getNodeBalances } from "../lib/node-balances";
+import type { NodeBalanceSnapshot } from "../lib/node-balances";
+import KrakenFunding from "./KrakenFunding";
+import NodeBridge from "./NodeBridge";
+import styles from "./NodeManager.module.css";
+
+const MAX_BACKUP_BYTES = 16 * 1024;
+
+type VaultAction = "idle" | "creating" | "restoring" | "exporting";
+
+export interface NodeManagerProps {
+  onSessionChange?: (session: NodeSession | null) => void;
+}
+
+function message(error: unknown) {
+  return error instanceof Error ? error.message : "The operation failed. Please try again.";
+}
+
+function download(contents: string, filename: string, type = "application/json") {
+  const url = URL.createObjectURL(new Blob([contents], { type }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function csvCell(value: string) {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+function shortAddress(address: string) {
+  return `${address.slice(0, 8)}…${address.slice(-6)}`;
+}
+
+export default function NodeManager({ onSessionChange }: NodeManagerProps) {
+  const [open, setOpen] = useState(false);
+  const [count, setCount] = useState(5);
+  const [session, setSession] = useState<NodeSession | null>(null);
+  const [vaultAction, setVaultAction] = useState<VaultAction>("idle");
+  const [vaultProgress, setVaultProgress] = useState(0);
+  const [vaultError, setVaultError] = useState("");
+  const [replaceConfirmed, setReplaceConfirmed] = useState(false);
+  const [targetEth, setTargetEth] = useState("0.01");
+  const [balances, setBalances] = useState<NodeBalanceSnapshot | null>(null);
+  const [balancesLoading, setBalancesLoading] = useState(false);
+  const [balanceError, setBalanceError] = useState("");
+  const [copyStatus, setCopyStatus] = useState("");
+  const createPasswordRef = useRef<HTMLInputElement | null>(null);
+  const restorePasswordRef = useRef<HTMLInputElement | null>(null);
+  const exportPasswordRef = useRef<HTMLInputElement | null>(null);
+  const restoreFileRef = useRef<HTMLInputElement | null>(null);
+  const selectedNodeRef = useRef<HTMLSelectElement | null>(null);
+  const sessionRef = useRef<NodeSession | null>(null);
+  const targetRef = useRef(targetEth);
+  const vaultGeneration = useRef(0);
+  const balanceGeneration = useRef(0);
+
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
+  useEffect(() => () => {
+    vaultGeneration.current += 1;
+    balanceGeneration.current += 1;
+    if (sessionRef.current) forgetNodeSession(sessionRef.current);
+  }, []);
+
+  const verified = Boolean(session && isVerifiedNodeSession(session));
+
+  useEffect(() => {
+    const sharedSession = verified ? session : null;
+    onSessionChange?.(sharedSession);
+    return () => {
+      if (sharedSession) onSessionChange?.(null);
+    };
+  }, [onSessionChange, session, verified]);
+  const targetWei = useMemo(() => {
+    try {
+      if (!/^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/.test(targetEth)) return null;
+      const value = utils.parseEther(targetEth);
+      return value.gt(0) ? value : null;
+    } catch {
+      return null;
+    }
+  }, [targetEth]);
+
+  const rows = useMemo(() => {
+    if (!verified || !session || !targetWei) return [];
+    const byAddress = new Map((balances?.balances || []).map((item) => [item.address.toLowerCase(), BigNumber.from(item.balanceWei)]));
+    return session.addresses.map((address, index) => {
+      const balance = byAddress.get(address.toLowerCase());
+      const deficit = balance ? (balance.gte(targetWei) ? BigNumber.from(0) : targetWei.sub(balance)) : targetWei;
+      return { index, address, balance, deficit, funded: Boolean(balance?.gte(targetWei)) };
+    });
+  }, [balances, session, targetWei, verified]);
+
+  function replaceSession(next: NodeSession) {
+    balanceGeneration.current += 1;
+    setBalances(null);
+    setBalancesLoading(false);
+    setBalanceError("");
+    setCopyStatus("");
+    setReplaceConfirmed(false);
+    const previous = sessionRef.current;
+    sessionRef.current = next;
+    setSession(next);
+    if (previous && previous !== next) forgetNodeSession(previous);
+  }
+
+  async function handleCreate() {
+    const passwordInput = createPasswordRef.current;
+    const password = passwordInput?.value || "";
+    if (session && !replaceConfirmed) {
+      if (passwordInput) passwordInput.value = "";
+      setVaultError("Confirm that you understand the current in-memory wallets will be forgotten before replacing them.");
+      return;
+    }
+    if (password.length < 12 || password.length > 128) {
+      if (passwordInput) passwordInput.value = "";
+      setVaultError("Backup password must be 12–128 characters.");
+      return;
+    }
+    const generation = ++vaultGeneration.current;
+    setVaultAction("creating");
+    setVaultProgress(0);
+    setVaultError("");
+    let next: NodeSession | null = null;
+    try {
+      next = createNodeSession(count);
+      const serialized = await encryptNodeBackup(next, password, (progress) => {
+        if (generation === vaultGeneration.current) setVaultProgress(progress * 100);
+      });
+      if (generation !== vaultGeneration.current) {
+        forgetNodeSession(next);
+        return;
+      }
+      download(serialized, `pons-node-backup-${next.id}.json`);
+      replaceSession(next);
+      next = null;
+    } catch (error) {
+      if (next) forgetNodeSession(next);
+      if (generation === vaultGeneration.current) setVaultError(message(error));
+    } finally {
+      if (passwordInput) passwordInput.value = "";
+      if (generation === vaultGeneration.current) {
+        setVaultAction("idle");
+        setVaultProgress(0);
+      }
+    }
+  }
+
+  async function handleRestore() {
+    const fileInput = restoreFileRef.current;
+    const passwordInput = restorePasswordRef.current;
+    const file = fileInput?.files?.[0];
+    const password = passwordInput?.value || "";
+    if (!file) {
+      if (passwordInput) passwordInput.value = "";
+      setVaultError("Choose an encrypted node backup file.");
+      return;
+    }
+    if (file.size > MAX_BACKUP_BYTES) {
+      if (passwordInput) passwordInput.value = "";
+      if (fileInput) fileInput.value = "";
+      setVaultError("Backup file must be 16 KB or smaller.");
+      return;
+    }
+    if (password.length < 12 || password.length > 128) {
+      if (passwordInput) passwordInput.value = "";
+      setVaultError("Backup password must be 12–128 characters.");
+      return;
+    }
+    const generation = ++vaultGeneration.current;
+    setVaultAction("restoring");
+    setVaultProgress(0);
+    setVaultError("");
+    let restored: NodeSession | null = null;
+    try {
+      const serialized = await file.text();
+      if (generation !== vaultGeneration.current) return;
+      restored = await restoreNodeBackup(serialized, password, (progress) => {
+        if (generation === vaultGeneration.current) setVaultProgress(progress * 100);
+      });
+      if (generation !== vaultGeneration.current) {
+        forgetNodeSession(restored);
+        return;
+      }
+      const current = sessionRef.current;
+      const sameWallets = current?.addresses.length === restored.addresses.length && current.addresses.every((address, index) => address === restored?.addresses[index]);
+      if (current && !sameWallets && !replaceConfirmed) {
+        throw new Error("This backup contains different wallets. Confirm replacement before restoring it.");
+      }
+      replaceSession(restored);
+      restored = null;
+    } catch (error) {
+      if (restored) forgetNodeSession(restored);
+      if (generation === vaultGeneration.current) setVaultError(message(error));
+    } finally {
+      if (passwordInput) passwordInput.value = "";
+      if (fileInput) fileInput.value = "";
+      if (generation === vaultGeneration.current) {
+        setVaultAction("idle");
+        setVaultProgress(0);
+      }
+    }
+  }
+
+  async function handleKeystoreExport() {
+    if (!session || !verified) return;
+    const passwordInput = exportPasswordRef.current;
+    const password = passwordInput?.value || "";
+    if (password.length < 12 || password.length > 128) {
+      if (passwordInput) passwordInput.value = "";
+      setVaultError("Keystore password must be 12–128 characters.");
+      return;
+    }
+    const index = Number(selectedNodeRef.current?.value || 0);
+    const generation = ++vaultGeneration.current;
+    setVaultAction("exporting");
+    setVaultProgress(0);
+    setVaultError("");
+    try {
+      const serialized = await exportNodeKeystore(session, index, password, (progress) => {
+        if (generation === vaultGeneration.current) setVaultProgress(progress * 100);
+      });
+      if (generation !== vaultGeneration.current || sessionRef.current !== session) return;
+      download(serialized, `pons-node-${index + 1}-keystore.json`);
+    } catch (error) {
+      if (generation === vaultGeneration.current) setVaultError(message(error));
+    } finally {
+      if (passwordInput) passwordInput.value = "";
+      if (generation === vaultGeneration.current) {
+        setVaultAction("idle");
+        setVaultProgress(0);
+      }
+    }
+  }
+
+  function updateTarget(value: string) {
+    balanceGeneration.current += 1;
+    targetRef.current = value;
+    setTargetEth(value);
+    setBalances(null);
+    setBalancesLoading(false);
+    setBalanceError("");
+  }
+
+  async function handleBalanceCheck() {
+    if (!session || !verified || !targetWei) return;
+    const generation = ++balanceGeneration.current;
+    const expectedSession = session;
+    const expectedTarget = targetEth;
+    setBalancesLoading(true);
+    setBalanceError("");
+    try {
+      const snapshot = await getNodeBalances(session.addresses);
+      if (generation !== balanceGeneration.current || sessionRef.current !== expectedSession || targetRef.current !== expectedTarget) return;
+      setBalances(snapshot);
+    } catch (error) {
+      if (generation === balanceGeneration.current && sessionRef.current === expectedSession) setBalanceError(message(error));
+    } finally {
+      if (generation === balanceGeneration.current) setBalancesLoading(false);
+    }
+  }
+
+  async function copyAddresses() {
+    if (!verified || !session) return;
+    try {
+      await navigator.clipboard.writeText(session.addresses.join("\n"));
+      setCopyStatus("Addresses copied.");
+    } catch {
+      setCopyStatus("Copy failed. Download the CSV instead.");
+    }
+  }
+
+  async function copyAddress(address: string, index: number) {
+    if (!verified) return;
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopyStatus(`Node ${index + 1} address copied.`);
+    } catch {
+      setCopyStatus("Copy failed. Download the CSV instead.");
+    }
+  }
+
+  function downloadFundingCsv() {
+    if (!verified || !session || !targetWei) return;
+    const header = ["node", "address", "network", "target_eth", "balance_eth", "deficit_eth", "status"];
+    const lines = rows.map((row) => [
+      String(row.index + 1),
+      row.address,
+      "Robinhood Chain (4663)",
+      targetEth,
+      row.balance ? utils.formatEther(row.balance) : "not checked",
+      balances ? utils.formatEther(row.deficit) : "not checked",
+      row.funded ? "Balance meets target" : balances ? "Below target" : "Not checked",
+    ].map(csvCell).join(","));
+    download([header.map(csvCell).join(","), ...lines].join("\r\n"), `pons-node-funding-${session.id}.csv`, "text/csv;charset=utf-8");
+  }
+
+  const busy = vaultAction !== "idle";
+
+  return (
+    <section className={styles.manager} aria-labelledby="node-manager-title">
+      <button className={styles.managerToggle} type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-controls="node-manager-panel">
+        <span><span className={styles.eyebrow}>Node wallets</span><strong id="node-manager-title">Prepare controlled funding wallets</strong><small>Encrypted local backup · individual Kraken withdrawals · PONS balance checks</small></span>
+        <span className={open ? styles.chevronOpen : styles.chevron} aria-hidden="true">⌄</span>
+      </button>
+
+      {open && <div id="node-manager-panel" className={styles.panel}>
+        <div className={styles.step}>
+          <div className={styles.stepHeading}><span>1</span><div><h2>Create and verify wallets</h2><p>Keys stay in this tab. Download the encrypted backup, then restore it to prove you can recover the wallets.</p></div></div>
+          {vaultError && <div className={styles.alert} role="alert"><span>{vaultError}</span><button type="button" onClick={() => setVaultError("")}>Dismiss</button></div>}
+          <div className={styles.controls}>
+            <label><span>Wallet count</span><input type="number" min="1" max={MAX_NODES} value={count} onChange={(event) => setCount(Math.max(1, Math.min(MAX_NODES, Number(event.target.value) || 1)))} disabled={busy} /></label>
+            <label><span>Backup password</span><input ref={createPasswordRef} type="password" minLength={12} maxLength={128} autoComplete="new-password" placeholder="12–128 characters" disabled={busy} /></label>
+            <button className={styles.primaryButton} type="button" onClick={handleCreate} disabled={busy}>{vaultAction === "creating" ? "Encrypting backup…" : session ? "Replace wallets" : "Generate wallets"}</button>
+          </div>
+          {session && <label className={styles.confirm}><input type="checkbox" checked={replaceConfirmed} onChange={(event) => setReplaceConfirmed(event.target.checked)} disabled={busy} /><span>I understand replacing these wallets forgets the current in-memory session. I have a recoverable encrypted backup.</span></label>}
+          {busy && <div className={styles.progress} role="status" aria-live="polite"><span style={{ width: `${Math.max(2, Math.min(100, vaultProgress))}%` }} /> <small>{vaultAction === "restoring" ? "Restoring" : vaultAction === "exporting" ? "Exporting keystore" : "Encrypting backup"}{vaultProgress ? ` · ${Math.round(vaultProgress)}%` : "…"}</small></div>}
+
+          <div className={styles.restoreBox}>
+            <div><strong>Verify or restore an encrypted backup</strong><small>JSON only · 16 KB maximum</small></div>
+            <input ref={restoreFileRef} type="file" accept="application/json,.json" aria-label="Encrypted node backup file" disabled={busy} />
+            <input ref={restorePasswordRef} type="password" minLength={12} maxLength={128} autoComplete="current-password" placeholder="Backup password" aria-label="Backup password for restore" disabled={busy} />
+            <button className={styles.secondaryButton} type="button" onClick={handleRestore} disabled={busy}>{vaultAction === "restoring" ? "Verifying…" : "Verify and restore"}</button>
+          </div>
+
+          {session && <div className={`${styles.sessionStatus} ${verified ? styles.verified : ""}`} role="status">
+            <span aria-hidden="true">{verified ? "✓" : "!"}</span><div><strong>{verified ? `${session.addresses.length} wallets verified` : `${session.addresses.length} wallets created; backup not yet verified`}</strong><small>{verified ? "Funding destinations are now available below." : "Addresses remain hidden until the encrypted backup is restored successfully."}</small></div>
+          </div>}
+        </div>
+
+        <div className={`${styles.step} ${!verified ? styles.locked : ""}`} aria-disabled={!verified}>
+          <div className={styles.stepHeading}><span>2</span><div><h2>Fund and monitor wallets</h2><p>Review every exchange withdrawal individually, then check Robinhood Chain balances after bridging.</p></div></div>
+          {!verified ? <p className={styles.lockMessage}>Verify the encrypted backup in step 1 to reveal funding destinations.</p> : session && <>
+            <KrakenFunding addresses={session.addresses} renderNodeActions={(_address, index) => <NodeBridge key={`${session.id}-${index}`} session={session} nodeIndex={index} />} />
+            <div className={styles.chainHeading}><strong>Robinhood Chain funding target</strong><small>This is separate from the Ethereum withdrawal amount above. Check here only after each wallet has bridged to chain ID 4663.</small></div>
+            <div className={styles.fundingControls}>
+              <label><span>Target per wallet (ETH)</span><input value={targetEth} maxLength={80} onChange={(event) => updateTarget(event.target.value)} inputMode="decimal" aria-invalid={!targetWei} /></label>
+              <button className={styles.secondaryButton} type="button" onClick={copyAddresses}>Copy addresses</button>
+              <button className={styles.secondaryButton} type="button" onClick={downloadFundingCsv} disabled={!targetWei}>Download funding CSV</button>
+              <button className={styles.primaryButton} type="button" onClick={handleBalanceCheck} disabled={!targetWei || balancesLoading}>{balancesLoading ? "Checking balances…" : "Check balances"}</button>
+            </div>
+            {!targetWei && <p className={styles.fieldError} role="alert">Enter an ETH amount greater than zero with no more than 18 decimal places.</p>}
+            {copyStatus && <p className={styles.copyStatus} role="status">{copyStatus}</p>}
+            {balanceError && <div className={styles.alert} role="alert"><span>{balanceError}</span><button type="button" onClick={handleBalanceCheck}>Retry</button></div>}
+            <div className={styles.walletList} aria-label="Node funding destinations">
+              {rows.map((row) => <article key={row.address} className={styles.walletRow}>
+                <div><span>Node {row.index + 1}</span><code title={row.address} aria-label={`Node ${row.index + 1} address ${row.address}`}>{shortAddress(row.address)}</code></div>
+                <div><span>Balance</span><strong>{row.balance ? `${utils.formatEther(row.balance)} ETH` : "Not checked"}</strong></div>
+                <div><span>Deficit</span><strong>{balances ? `${utils.formatEther(row.deficit)} ETH` : "Not checked"}</strong></div>
+                <em className={row.funded ? styles.met : styles.pending}>{row.funded ? "Balance meets target" : balances ? "Below target" : "Not checked"}</em>
+                <button className={styles.rowCopy} type="button" onClick={() => void copyAddress(row.address, row.index)} aria-label={`Copy node ${row.index + 1} address`}>Copy address</button>
+              </article>)}
+            </div>
+            {balances && <p className={styles.snapshot}>Canonical Robinhood Chain (4663) balance snapshot · block {balances.blockNumber.toLocaleString()} · {new Date(balances.checkedAt).toLocaleString()}. A matching balance does not prove which withdrawal or bridge funded it.</p>}
+
+            <div className={styles.keystoreBox}>
+              <div><strong>Export one wallet for external control</strong><small>Produces a standard encrypted keystore. Keep its password separate from the file.</small></div>
+              <select ref={selectedNodeRef} aria-label="Node to export">{session.addresses.map((address, index) => <option value={index} key={address}>Node {index + 1} · {shortAddress(address)}</option>)}</select>
+              <input ref={exportPasswordRef} type="password" minLength={12} maxLength={128} autoComplete="new-password" placeholder="New keystore password" aria-label="Keystore password" disabled={busy} />
+              <button className={styles.secondaryButton} type="button" onClick={handleKeystoreExport} disabled={busy}>{vaultAction === "exporting" ? "Exporting…" : "Download keystore"}</button>
+            </div>
+          </>}
+        </div>
+      </div>}
+    </section>
+  );
+}

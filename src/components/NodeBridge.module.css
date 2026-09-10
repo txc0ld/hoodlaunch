@@ -1,0 +1,38 @@
+.bridge { display: grid; gap: 9px; padding-top: 9px; border-top: 1px solid #30322e; }
+.controls { display: grid; grid-template-columns: minmax(140px, .8fr) 1.2fr; gap: 8px; align-items: end; }
+.controls label { display: grid; gap: 4px; color: #a9aca3; font-size: 9px; font-weight: 700; }
+.controls input { width: 100%; height: 38px; border: 1px solid #393b36; border-radius: 10px; padding: 0 10px; outline: none; background: #20211f; color: #f0f1ec; }
+.controls input:focus, .bridgeButton:focus-visible, .confirmButton:focus-visible, .secondaryButton:focus-visible, .alert button:focus-visible { outline: none; border-color: #bdf641; box-shadow: 0 0 0 3px rgba(189,246,65,.14); }
+.bridgeButton, .confirmButton, .secondaryButton { min-height: 38px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 10px; padding: 0 12px; font-size: 9px; font-weight: 850; cursor: pointer; }
+.bridgeButton { border-color: #627a2d; background: #29351c; color: #d9ff83; }
+.confirmButton { background: #bdf641; color: #10120d; }
+.secondaryButton { border-color: #3b3d38; background: #232522; color: #e9ebe5; }
+.bridgeButton:disabled, .confirmButton:disabled, .secondaryButton:disabled { opacity: .5; cursor: not-allowed; }
+.fieldError { margin: 0; color: #ff9d84; font-size: 8px; }
+.alert { display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 9px 10px; border: 1px solid rgba(255,143,112,.3); border-radius: 9px; background: rgba(255,143,112,.07); color: #f3b4a3; font-size: 9px; line-height: 1.4; }
+.alert button { padding: 0; border: 0; background: transparent; color: #d9ff83; font-weight: 750; cursor: pointer; }
+.review, .operation { display: grid; gap: 10px; padding: 11px; border: 1px solid rgba(189,246,65,.24); border-radius: 11px; background: rgba(189,246,65,.035); }
+.reviewHeading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.reviewHeading > div { display: grid; gap: 2px; }
+.reviewHeading span, .operation > div > span { color: #bdf641; font-size: 7px; font-weight: 850; letter-spacing: .1em; text-transform: uppercase; }
+.reviewHeading strong, .operation > div > strong { color: #eceee8; font-size: 11px; }
+.reviewHeading em { padding: 3px 6px; border-radius: 999px; font-size: 8px; font-style: normal; font-weight: 850; }
+.ready { background: rgba(189,246,65,.13); color: #cfff64; }
+.expired { background: rgba(255,143,112,.12); color: #ffab94; }
+.fullAddress { padding: 7px; border-radius: 7px; background: #151614; color: #d9ff83; font-size: 8px; overflow-wrap: anywhere; }
+.details { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 0; }
+.details div, .operation dl div { min-width: 0; padding: 7px; border-radius: 7px; background: #1a1b19; }
+.details dt, .operation dt { color: #73766e; font-size: 7px; text-transform: uppercase; }
+.details dd, .operation dd { margin: 2px 0 0; color: #e5e7e1; font-size: 8px; font-weight: 750; overflow-wrap: anywhere; }
+.disclaimer, .operation p, .operation small { margin: 0; color: #85887f; font-size: 8px; line-height: 1.5; }
+.confirm { display: flex; align-items: flex-start; gap: 7px; color: #a5a89f; font-size: 9px; line-height: 1.45; }
+.confirm input { flex: 0 0 auto; accent-color: #bdf641; }
+.operation { border-color: #3a3c37; background: #1c1d1b; }
+.operation > div { display: grid; gap: 3px; }
+.operation dl { display: grid; gap: 6px; margin: 0; }
+.complete { border-color: rgba(189,246,65,.24); }
+.problem { border-color: rgba(255,143,112,.3); }
+@media (max-width: 560px) {
+  .controls, .details { grid-template-columns: 1fr; }
+  .reviewHeading { align-items: flex-start; }
+}
