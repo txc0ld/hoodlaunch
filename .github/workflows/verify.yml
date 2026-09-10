@@ -1,4 +1,4 @@
-name: Verify Hoodlaunch
+name: Verify HOODLABS
 on:
   push:
   pull_request:
