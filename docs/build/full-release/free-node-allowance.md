@@ -7,3 +7,5 @@ Before use: independently verify migration on real PostgreSQL with multiple conn
 Root implements in an isolated worktree under the documented agent-capacity exception; no production migration, capability enablement, private-key handling or financial transactions are part of this backend slice. Independent verification and fresh review required. Evidence outside published source in verification/full-release/free-node-allowance.
 
 Key principle: atomic account allowances, client-owned keys, recoverable retries.
+
+Repair contract: matching prior requests are returned before new-attempt entitlement checks, even after Pro expires. Holder-only new Pro authority is bound to the proof captured before verification and rechecked under the account lock, including count1 cooldown bypass. A verified subscription is independent of holder lookup failures. Completed server Pro observations expire after15seconds (5seconds future clock tolerance) and are checked after lock acquisition and before commit; late checks roll back Pro writes. This bounds provider observations and does not promise continuous Stripe/chain truth.

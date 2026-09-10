@@ -26,20 +26,24 @@ begin
  return jsonb_build_object('nextEligibleAt',eligible,'available',eligible is null or eligible<=clock_timestamp());
 end $$;
 
-create function public.hood_node_generation_reserve(p_user uuid,p_session text,p_request uuid,p_count integer,p_pro boolean) returns jsonb
+create function public.hood_node_generation_reserve(p_user uuid,p_session text,p_request uuid,p_count integer,p_pro boolean,p_holder_proof uuid default null,p_holder_address text default null,p_subscription boolean default false,p_checked_at timestamptz default null) returns jsonb
 language plpgsql security definer set search_path='' as $$
-declare prior public.hood_node_attempts; eligible timestamptz; reserved timestamptz;
+declare prior public.hood_node_attempts; eligible timestamptz; reserved timestamptz; is_pro boolean;
 begin
  -- Shared account/session lock also serializes holder entitlement and logout mutations.
  perform public.hood_holder_session(p_user,p_session);
- if p_request is null or p_count is null or p_count<1 or p_count>50 or p_pro is null or (not p_pro and p_count<>1) then raise exception 'invalid generation request'; end if;
+ if p_request is null or p_count is null or p_count<1 or p_count>50 or p_pro is null then raise exception 'invalid generation request'; end if;
  select * into prior from public.hood_node_attempts where user_id=p_user and request_id=p_request;
  if found then
   if prior.wallet_count<>p_count then raise exception 'generation request conflict'; end if;
   return jsonb_build_object('reserved',true,'requestId',prior.request_id,'count',prior.wallet_count,'reservedAt',prior.reserved_at,'nextEligibleAt',prior.next_eligible_at);
  end if;
  reserved:=clock_timestamp();
- if not p_pro then
+ -- The completed server check is a bounded observation, not continuous chain/Stripe truth.
+ is_pro:=p_pro and p_checked_at is not null and p_checked_at>=reserved-interval '15 seconds' and p_checked_at<=reserved+interval '5 seconds' and
+  ((p_subscription is true) or exists(select 1 from public.hood_holder_proofs hp where hp.user_id=p_user and hp.session_hash=p_session and hp.proof_id=p_holder_proof and hp.address=p_holder_address));
+ if not is_pro and p_count<>1 then return jsonb_build_object('reserved',false,'code','PRO_REQUIRED'); end if;
+ if not is_pro then
   select next_eligible_at into eligible from public.hood_node_cooldowns where user_id=p_user;
   if eligible is not null and eligible>reserved then
    return jsonb_build_object('reserved',false,'nextEligibleAt',eligible);
@@ -52,8 +56,9 @@ begin
  values(p_user,p_request,p_count,reserved,eligible);
  -- A wait must not extend session authority. Exception rolls back both writes.
  perform public.hood_holder_session(p_user,p_session);
+ if is_pro and (p_checked_at<clock_timestamp()-interval '15 seconds' or p_checked_at>clock_timestamp()+interval '5 seconds') then raise exception 'generation authorization expired'; end if;
  return jsonb_build_object('reserved',true,'requestId',p_request,'count',p_count,'reservedAt',reserved,'nextEligibleAt',eligible);
 end $$;
-revoke all on function public.hood_node_generation_status(uuid,text), public.hood_node_generation_reserve(uuid,text,uuid,integer,boolean) from public,anon,authenticated;
-grant execute on function public.hood_node_generation_status(uuid,text), public.hood_node_generation_reserve(uuid,text,uuid,integer,boolean) to service_role;
+revoke all on function public.hood_node_generation_status(uuid,text), public.hood_node_generation_reserve(uuid,text,uuid,integer,boolean,uuid,text,boolean,timestamptz) from public,anon,authenticated;
+grant execute on function public.hood_node_generation_status(uuid,text), public.hood_node_generation_reserve(uuid,text,uuid,integer,boolean,uuid,text,boolean,timestamptz) to service_role;
 commit;
