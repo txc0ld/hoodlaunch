@@ -35,6 +35,13 @@ test('real inert EIP191 proof is session-bound and the threshold is exact, inclu
  for(const [amount,eligible] of [[ethers.utils.parseUnits('500000',18),false],[THRESHOLD.sub(1),false],[THRESHOLD,true],[THRESHOLD.add(1),true],[ethers.constants.Zero,false]]){h.controls.balance=amount;const status=await h.access();assert.equal(status.eligible,eligible);assert.equal(status.balance,amount.toString());assert.equal(status.verified,true);}
  assert.ok(h.calls.filter(x=>x.startsWith('eth_')).every(x=>x==='eth_chainId'));
 });
+test('an allowlisted wallet grants only after current-session proof, balance checks and a fresh context reread',async t=>{
+ const old=process.env.PRO_WALLET_ALLOWLIST;process.env.PRO_WALLET_ALLOWLIST=wallet.address.toUpperCase().replace('0X','0x');t.after(()=>{if(old===undefined)delete process.env.PRO_WALLET_ALLOWLIST;else process.env.PRO_WALLET_ALLOWLIST=old;});
+ const h=await harness(t);h.controls.balance=ethers.constants.Zero;
+ let status=await h.access();assert.equal(status.verified,false);assert.equal(status.granted,false);assert.equal(status.eligible,false);
+ await prove(h);status=await h.access();assert.equal(status.verified,true);assert.equal(status.granted,true);assert.equal(status.eligible,false);assert.equal(status.balance,'0');
+ delete process.env.PRO_WALLET_ALLOWLIST;status=await h.access();assert.equal(status.granted,false);assert.equal(status.eligible,false);
+});
 test('public Pro terms use exact shared display and entitlement constants',()=>{
  const terms=load('src/lib/pro-access.ts');
  assert.equal(terms.PRO_PRICE_LABEL,'US$15/month');assert.equal(terms.HOODRICH_MINIMUM,'666666');assert.equal(terms.HOODRICH_MINIMUM_FORMATTED,'666,666');
@@ -72,7 +79,8 @@ test('contract/delegated wallets, wrong chain/decimals, missing token and reorg 
  await h.verify(c,sig);for(const flag of ['contractWallet','wrongChain','wrongDecimals','noToken','reorg','dropHead','rpcFailure']){h.controls[flag]=true;const result=await h.access();assert.equal(result.eligible,false);assert.equal(result.unavailable,true);delete h.controls[flag];}
 });
 test('unlink during balance read revokes authority before it can be returned',async t=>{
- const h=await harness(t);await prove(h);h.controls.onBalance=async()=>h.holder.unlinkHolder(h.database,U,S);const result=await h.access();assert.equal(result.eligible,false);assert.equal(result.verified,false);
+ const old=process.env.PRO_WALLET_ALLOWLIST;process.env.PRO_WALLET_ALLOWLIST=wallet.address;t.after(()=>{if(old===undefined)delete process.env.PRO_WALLET_ALLOWLIST;else process.env.PRO_WALLET_ALLOWLIST=old;});
+ const h=await harness(t);await prove(h);h.controls.onBalance=async()=>h.holder.unlinkHolder(h.database,U,S);const result=await h.access();assert.equal(result.eligible,false);assert.equal(result.granted,false);assert.equal(result.verified,false);
 });
 test('SQL denies anonymous direct proof, mutation and read access',async t=>{
  const h=await harness(t);await h.db.exec('reset role;set role anon');await assert.rejects(h.db.query('select * from hood_holder_wallets'));await assert.rejects(h.db.query('select public.hood_holder_context($1,$2)',[U,S]));await assert.rejects(h.db.query('select public.hood_holder_unlink($1,$2)',[U,S]));
@@ -84,7 +92,7 @@ test('Stripe and holder eligibility are independent OR branches, including eithe
  const state={subscription:false,holder:false,stripeFail:false,holderFail:false};
  class Stripe{constructor(){this.subscriptions={list:async()=>{if(state.stripeFail)throw Error('inert Stripe outage');return {data:state.subscription?[{customer:'cus_test',status:'active',items:{data:[{quantity:1,price:{id:'price_fixed'},current_period_end:Math.floor(Date.now()/1000)+1000}]}}]:[]};}};}}
  const db={from:()=>({select:()=>({eq:()=>({maybeSingle:async()=>({data:{customer_id:'cus_test'},error:null})})})})};
- const svc=load('src/server/public-services.ts',{'@supabase/supabase-js':{createClient:()=>db},stripe:Stripe,'./public-holder':{holderAccess:async()=>{if(state.holderFail)throw Error('inert holder outage');return {address:wallet.address,verified:state.holder,eligible:state.holder,balance:null,unavailable:false};}}});
+ const svc=load('src/server/public-services.ts',{'@supabase/supabase-js':{createClient:()=>db},stripe:Stripe,'./public-holder':{holderAccess:async()=>{if(state.holderFail)throw Error('inert holder outage');return {address:wallet.address,verified:state.holder,eligible:state.holder,granted:false,balance:null,unavailable:false};}}});
  for(const [subscription,holder,stripeFail,holderFail,expected] of [[true,false,false,true,true],[false,true,true,false,true],[true,true,false,false,true],[false,false,false,false,false],[false,false,true,false,false],[false,false,false,true,false]]){
   Object.assign(state,{subscription,holder,stripeFail,holderFail});const status=await svc.getProStatus(U,S);assert.equal(status.pro,expected);
   // Early grants may leave the other provider unresolved. Unknown flags must
@@ -109,8 +117,12 @@ function statusHarness(t, globals={}) {
  const drain=async()=>{for(let i=0;i<20;i++)await Promise.resolve();};
  return {svc,subscription,holder,timers,drain,expire:()=>{for(const [id,{fn,ms}] of [...timers]){assert.equal(ms,8000);timers.delete(id);fn();}},
   paid:{data:[{customer:'cus_test',status:'active',items:{data:[{quantity:1,price:{id:'price_fixed'},current_period_end:Math.floor(Date.now()/1000)+1000}]}}]},
-  holding:{address:wallet.address,verified:true,eligible:true,balance:THRESHOLD.toString(),unavailable:false}};
+  holding:{address:wallet.address,verified:true,eligible:true,granted:false,balance:THRESHOLD.toString(),unavailable:false}};
 }
+test('a verified wallet grant is a separate prompt Pro branch with no fabricated holding or subscription',async t=>{
+ const h=statusHarness(t);let result;h.svc.getProStatus(U,S).then(x=>{result=x;});h.holder.resolve({...h.holding,eligible:false,granted:true,balance:'0'});await h.drain();
+ assert.equal(result.pro,true);assert.equal(result.subscription,false);assert.equal(result.holder.eligible,false);assert.equal(result.holder.granted,true);assert.equal(result.holder.balance,'0');assert.equal(h.timers.size,0);
+});
 for(const winner of ['subscription','holder'])test(`a verified ${winner} grants promptly while the other provider never resolves`,async t=>{
  const h=statusHarness(t);let result;h.svc.getProStatus(U,S).then(x=>{result=x;});
  h[winner].resolve(winner==='subscription'?h.paid:h.holding);await h.drain();

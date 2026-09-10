@@ -10,12 +10,13 @@ export type HolderAccess = {
   address: string | null;
   verified: boolean;
   eligible: boolean;
+  granted: boolean;
   /** Exact token balance in smallest units; never a floating-point amount. */
   balance: string | null;
   unavailable: boolean;
 };
 export type ProStatus = { pro: boolean; subscription: boolean; subscriptionUnavailable: boolean; holder: HolderAccess };
 export type ProAccessState = ProStatus & { configured: boolean; signedIn: boolean; billing: boolean };
-export const EMPTY_HOLDER_ACCESS: HolderAccess = { address: null, verified: false, eligible: false, balance: null, unavailable: false };
+export const EMPTY_HOLDER_ACCESS: HolderAccess = { address: null, verified: false, eligible: false, granted: false, balance: null, unavailable: false };
 export const EMPTY_PRO_ACCESS: ProAccessState = { configured: false, signedIn: false, pro: false, billing: false, subscription: false, subscriptionUnavailable: false, holder: EMPTY_HOLDER_ACCESS };
 export type HolderChallenge = { challengeId: string; message: string; address: string; chainId: number };

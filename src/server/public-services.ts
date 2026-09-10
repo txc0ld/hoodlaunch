@@ -66,7 +66,7 @@ export async function getProStatus(userId:string,sessionHash:string):Promise<Pro
       resolve({ ...status, holder: { ...status.holder } });
     };
     const complete = () => {
-      status.pro = status.subscription || status.holder.eligible;
+      status.pro = status.subscription || status.holder.eligible || status.holder.granted;
       if (status.pro || (subscriptionDone && holderDone)) finish();
     };
     const deadline = setTimeout(finish, PRO_CHECK_TIMEOUT_MS);
@@ -104,6 +104,6 @@ export async function requirePro(req: NextApiRequest) {
   const id = (await account(req))!;
   await takeQuota(`pro-check:${id}`, 120, 3600);
   const token=readToken(req);if(!token)fail(401,'SIGN_IN','Sign in to use Pro services.');
-  if (!(await hasPro(id,digest(token)))) fail(403, 'PRO_REQUIRED', 'An active subscription or verified qualifying HOODRICH holding is required.');
+  if (!(await hasPro(id,digest(token)))) fail(403, 'PRO_REQUIRED', 'An active subscription, verified wallet grant or qualifying HOODRICH holding is required.');
   return id;
 }

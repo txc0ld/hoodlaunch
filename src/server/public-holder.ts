@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { BigNumber, Contract, providers, utils } from 'ethers';
 import { EMPTY_HOLDER_ACCESS, HOODRICH_CHAIN_ID, HOODRICH_DECIMALS, HOODRICH_MINIMUM_UNITS, HOODRICH_TOKEN, type HolderAccess, type HolderChallenge } from '../lib/pro-access';
 import { fail, origin } from './public-security';
+import { isPublicWalletGranted } from './public-wallet-grants';
 type Db = { rpc(name:string,args:Record<string,unknown>):PromiseLike<{data:unknown;error:unknown}> };
 type Context = {address:string|null;proof_id:string|null;expires_at:string};
 const RPC='https://rpc.mainnet.chain.robinhood.com';
@@ -62,8 +63,8 @@ export async function holderAccess(db:Db,user:string,session:string):Promise<Hol
   try {
     const balance=await readHolderBalance(c.address),current=await context(db,user,session);
     if(current.address!==c.address || current.proof_id!==c.proof_id)return {...EMPTY_HOLDER_ACCESS,address:current.address};
-    return {address:c.address,verified:true,eligible:BigNumber.from(balance).gte(HOODRICH_MINIMUM_UNITS),balance,unavailable:false};
-  } catch {return {address:c.address,verified:false,eligible:false,balance:null,unavailable:true};}
+    return {address:c.address,verified:true,eligible:BigNumber.from(balance).gte(HOODRICH_MINIMUM_UNITS),granted:isPublicWalletGranted(c.address),balance,unavailable:false};
+  } catch {return {address:c.address,verified:false,eligible:false,granted:false,balance:null,unavailable:true};}
 }
 export async function unlinkHolder(db:Db,user:string,session:string):Promise<void> {
   await context(db,user,session);

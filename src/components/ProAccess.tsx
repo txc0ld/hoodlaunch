@@ -61,14 +61,14 @@ export default function ProAccess({ onAccessChange, salesEnabled = false }: { on
   }
   return <section className={styles.panel} aria-labelledby="pro-title">
     <div><p className={styles.label}>HOODLABS PRO · {PRO_PRICE_LABEL}</p><h2 id="pro-title">One launch. Up to 50 wallets.</h2><p>Token launching stays free. Pro adds the generated-wallet workspace and managed uploads. Subscribe for {PRO_PRICE_LABEL} or qualify by holding {HOODRICH_MINIMUM_FORMATTED} HOODRICH ($RICH).</p></div>
-    {access.pro ? <p className={styles.active}>Pro active{access.holder?.eligible ? ' · HOODRICH holder' : ' · subscription'} · 50 upload attempts per day</p> : <p className={styles.note}>Your wallet keys stay in this browser. Account services never receive your seed phrase, backup password or exchange credentials. Network and protocol fees still apply.</p>}
+    {access.pro ? <p className={styles.active}>Pro active{access.holder?.granted ? ' · wallet grant' : access.holder?.eligible ? ' · HOODRICH holder' : ' · subscription'} · 50 upload attempts per day</p> : <p className={styles.note}>Your wallet keys stay in this browser. Account services never receive your seed phrase, backup password or exchange credentials. Network and protocol fees still apply.</p>}
     {access.configured && !access.signedIn && <form onSubmit={event => { event.preventDefault(); void act(sent ? 'verify-code' : 'request-code'); }} className={styles.controls}>
       <label>Email<input type="email" autoComplete="email" value={email} onChange={event => { setEmail(event.target.value); setSent(false); }} required maxLength={254} disabled={busy} /></label>
       {sent && <label>Email code<input inputMode="numeric" autoComplete="one-time-code" value={code} onChange={event => setCode(event.target.value)} pattern="[0-9]{6,8}" required maxLength={8} disabled={busy} /></label>}
       <button disabled={busy}>{busy ? 'Working…' : sent ? 'Sign in' : 'Email me a code'}</button>
     </form>}
     {access.signedIn && <div className={styles.controls}>
-      {(!access.holder?.eligible || access.subscription) && <button disabled={busy || !access.billing || (!access.subscription && !salesEnabled)} onClick={() => void act(access.subscription ? 'portal' : 'checkout')}>{access.subscription ? 'Manage subscription' : access.billing && salesEnabled ? 'See Pro price & subscribe' : 'Pro subscriptions coming soon'}</button>}
+      {((!access.holder?.eligible && !access.holder?.granted) || access.subscription) && <button disabled={busy || !access.billing || (!access.subscription && !salesEnabled)} onClick={() => void act(access.subscription ? 'portal' : 'checkout')}>{access.subscription ? 'Manage subscription' : access.billing && salesEnabled ? 'See Pro price & subscribe' : 'Pro subscriptions coming soon'}</button>}
       <button disabled={busy || !access.billing} onClick={() => void act('portal')}>Manage billing</button>
       <button disabled={busy} onClick={() => void act('logout')}>Sign out & lock wallets</button>
     </div>}
@@ -77,14 +77,15 @@ export default function ProAccess({ onAccessChange, salesEnabled = false }: { on
       <p>Keep at least {HOODRICH_MINIMUM_FORMATTED} $RICH in one wallet on Robinhood Chain. Sign in by email, then verify that wallet with a message. Tokens stay in your wallet; no transfer, approval or gas payment is needed.</p>
       <p className={styles.note}>Token contract: <a href={'https://robinhoodchain.blockscout.com/token/' + HOODRICH_TOKEN} target="_blank" rel="noopener noreferrer"><code>{HOODRICH_TOKEN}</code></a></p>
       {access.holder?.address && <p>Linked wallet: <code>{access.holder.address}</code>{holderBalance() !== null && <> · Confirmed balance: {holderBalance()} $RICH</>}</p>}
+      {access.holder?.granted && <p>This verified wallet has an explicit Pro wallet grant. The grant is separate from subscriptions and token holdings.</p>}
       {access.holder?.unavailable && <p>Token balance verification is temporarily unavailable. An independently verified paid subscription still grants Pro.</p>}
-      {access.holder?.verified && !access.holder.eligible && !access.holder.unavailable && <p>This wallet is verified, but its confirmed balance is below {HOODRICH_MINIMUM_FORMATTED} $RICH.</p>}
+      {access.holder?.verified && !access.holder.eligible && !access.holder.granted && !access.holder.unavailable && <p>This wallet is verified, but its confirmed balance is below {HOODRICH_MINIMUM_FORMATTED} $RICH.</p>}
       {access.signedIn && <div className={styles.controls}>
         <button disabled={busy} onClick={() => void verifyWallet()}>{access.holder?.verified ? 'Verify wallet again' : 'Verify holding wallet'}</button>
         <button disabled={busy} onClick={() => void refresh()}>Refresh Pro access</button>
         <button disabled={busy} onClick={() => void act('holder-unlink')}>Unlink holding wallet</button>
       </div>}
-      <p className={styles.note}>Standard wallets only; smart contract and delegated wallets are not supported for this proof yet. One wallet can link to one account. Unlink before changing wallets, and verify again after signing in to a new session. Balances are rechecked for managed services and about every minute in this workspace. If you fall below the threshold, holder access ends on the next check. Becoming eligible does not cancel an existing subscription; manage it separately if you choose.</p>
+      <p className={styles.note}>A configured wallet grant still requires email sign-in and the Verify holding wallet proof. Standard wallets only; smart contract and delegated wallets are not supported for this proof yet. One wallet can link to one account. Unlink before changing wallets, and verify again after signing in to a new session. Balances are rechecked for managed services and about every minute in this workspace. If you fall below the threshold, holder access ends on the next check. Becoming eligible or receiving a wallet grant does not cancel an existing subscription; manage it separately if you choose.</p>
     </div>
     {message && <p role="status">{message}</p>}
     <p className={styles.note}>Images uploaded to IPFS are public and may remain available permanently. Keep recovery backups offline. <a href="/security" target="_blank" rel="noopener noreferrer">Security & recovery</a></p>
