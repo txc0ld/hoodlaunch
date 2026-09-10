@@ -78,3 +78,20 @@ test('wallet rejection is surfaced without proof submission or retry', async () 
   await assert.rejects(verifyHolderWallet(f.wallet, origin, f.request, f.check), /User rejected/);
   assert.equal(f.accountCalls.length, 1);
 });
+
+for (const event of ['accountsChanged', 'chainChanged', 'disconnect']) test(`transient ${event} invalidates proof and removes temporary listeners`, async () => {
+  const f = fixture(), listeners = new Map(), old = f.wallet.request;
+  f.wallet.on = (event, callback) => listeners.set(event, callback);
+  f.wallet.removeListener = (event, callback) => { assert.equal(listeners.get(event), callback); listeners.delete(event); };
+  f.wallet.request = async args => { const result = await old(args); if (args.method === 'personal_sign') listeners.get(event)(); return result; };
+  await assert.rejects(verifyHolderWallet(f.wallet, origin, f.request, f.check), /changed during/);
+  assert.equal(f.accountCalls.some(v => v.action === 'holder-verify'), false);
+  assert.equal(listeners.size, 0);
+});
+test('successful proof removes all temporary listeners', async () => {
+  const f = fixture(), listeners = new Map();
+  f.wallet.on = (event, callback) => listeners.set(event, callback);
+  f.wallet.removeListener = (event, callback) => { assert.equal(listeners.get(event), callback); listeners.delete(event); };
+  await verifyHolderWallet(f.wallet, origin, f.request, f.check);
+  assert.equal(listeners.size, 0);
+});

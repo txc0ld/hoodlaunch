@@ -7,7 +7,13 @@ export interface HolderWallet {
 }
 type AccountRequest = (action: string, data?: Record<string, string>) => Promise<unknown>;
 /** An explicit authentication message only. This function never requests a transaction or approval. */
-export async function verifyHolderWallet(wallet: HolderWallet, appOrigin: string, request: AccountRequest, assertActive: () => void): Promise<void> {
+export async function verifyHolderWallet(wallet: HolderWallet, appOrigin: string, request: AccountRequest, assertSessionActive: () => void): Promise<void> {
+  let changed = false;
+  const invalidate = () => { changed = true; };
+  const events = ['accountsChanged', 'chainChanged', 'disconnect'];
+  const assertActive = () => { assertSessionActive(); if (changed) throw new Error('Your wallet changed during verification. Start again.'); };
+  try {
+  for (const event of events) wallet.on?.(event, invalidate);
   assertActive();
   const accounts = await wallet.request({ method: 'eth_requestAccounts' });
   assertActive();
@@ -35,4 +41,5 @@ export async function verifyHolderWallet(wallet: HolderWallet, appOrigin: string
   await sameWallet();
   await request('holder-verify', { challengeId: challenge.challengeId, signature });
   assertActive();
+  } finally { for (const event of events) wallet.removeListener?.(event, invalidate); }
 }
