@@ -39,9 +39,9 @@ async function validatePrice(stripe: Stripe, expectedId: string): Promise<void> 
   if (!value || typeof value !== 'object') invalidTerms();
   const price = value as Stripe.Price;
   const product = price.product;
-  if (price.id !== expectedId || !price.active || price.currency !== 'usd' || price.unit_amount !== 1500 || price.billing_scheme !== 'per_unit' || price.type !== 'recurring' ||
+  if (price.id !== expectedId || price.active !== true || price.currency !== 'usd' || price.unit_amount !== 1500 || price.custom_unit_amount !== null || price.billing_scheme !== 'per_unit' || price.type !== 'recurring' ||
       !price.recurring || price.recurring.interval !== 'month' || price.recurring.interval_count !== 1 || price.recurring.usage_type !== 'licensed' ||
-      !product || typeof product === 'string' || product.deleted === true || product.id !== PRO_PRODUCT_ID || product.active !== true) invalidTerms();
+      price.transform_quantity !== null || !product || typeof product === 'string' || product.deleted === true || product.id !== PRO_PRODUCT_ID || product.active !== true) invalidTerms();
 }
 export async function billingPortal(stripe: Stripe, customer: string, appOrigin: string): Promise<string> {
   const configuration = portalConfiguration();

@@ -9,7 +9,7 @@ const user='11111111-1111-1111-1111-111111111111', customer='cus_A', origin='htt
 async function harness(t) {
  const db=new PGlite(); await db.exec('create role anon; create role authenticated; create role service_role bypassrls; create schema auth; create table auth.users(id uuid primary key);');
  await db.exec(fs.readFileSync('db/001_public_services.sql','utf8'));await db.query('insert into auth.users values($1)',[user]);await db.query('insert into public.hood_billing(user_id,customer_id) values($1,$2)',[user,customer]);await db.exec('set role service_role');
- const calls=[],sessions=new Map(),subscriptions=new Map([['sub_A',{id:'sub_A',customer,status:'active',cancel_at_period_end:false,items:{has_more:false,data:[{price:{id:'price_fixed'},quantity:1}]}}]]),prices=new Map([['price_fixed',{id:'price_fixed',active:true,currency:'usd',unit_amount:1500,billing_scheme:'per_unit',type:'recurring',recurring:{interval:'month',interval_count:1,usage_type:'licensed'},product:{id:'prod_hoodlabs_pro',active:true}}]]),cache=new Map(),controls={};let now=Date.now();
+ const calls=[],sessions=new Map(),subscriptions=new Map([['sub_A',{id:'sub_A',customer,status:'active',cancel_at_period_end:false,items:{has_more:false,data:[{price:{id:'price_fixed'},quantity:1}]}}]]),prices=new Map([['price_fixed',{id:'price_fixed',active:true,currency:'usd',unit_amount:1500,custom_unit_amount:null,billing_scheme:'per_unit',type:'recurring',recurring:{interval:'month',interval_count:1,usage_type:'licensed'},transform_quantity:null,product:{id:'prod_hoodlabs_pro',active:true}}]]),cache=new Map(),controls={};let now=Date.now();
  const database={rpc:async(name,args)=>{if(controls.databaseDelay){now+=controls.databaseDelay;controls.databaseDelay=0;}if((name==='hood_checkout_bind' && controls.bindFail) || (name==='hood_checkout_bind_subscription' && controls.subscriptionBindFail))return {data:null,error:{message:'injected write failure'}};
   try{const query=name==='hood_checkout_reserve'?'select public.hood_checkout_reserve($1,$2::jsonb,$3,$4,$5) as result':name==='hood_checkout_bind_subscription'?'select public.hood_checkout_bind_subscription($1,$2,$3,$4) as result':'select public.hood_checkout_bind($1,$2,$3) as result';
    const values=name==='hood_checkout_reserve'?[args.p_user,JSON.stringify(args.p_request),args.p_expected_key,args.p_expired_session,args.p_canceled_subscription||null]:name==='hood_checkout_bind_subscription'?[args.p_user,args.p_key,args.p_session,args.p_subscription]:[args.p_user,args.p_key,args.p_session];
@@ -98,7 +98,21 @@ test('checkout validates authoritative exact US$15 monthly licensed price before
   price=>price.product={...price.product,id:'prod_other'},price=>price.product={...price.product,active:false},price=>price.currency='aud',price=>price.unit_amount=1499,
   price=>price.active=false,price=>price.billing_scheme='tiered',price=>price.type='one_time',price=>price.recurring.interval='year',price=>price.recurring.interval_count=2,price=>price.recurring.usage_type='metered',
  ];
- for(const mutate of mutations){const price=JSON.parse(baseline);mutate(price);h.prices.set('price_fixed',price);await assert.rejects(h.run(),/terms/);assert.equal(creates(h).length,0);assert.equal((await h.db.query('select checkout_key from hood_billing')).rows[0].checkout_key,null);}
+ for(const mutate of mutations){const before=h.calls.length,price=JSON.parse(baseline);mutate(price);h.prices.set('price_fixed',price);await assert.rejects(h.run(),/terms/);assert.deepEqual(h.calls.slice(before).map(call=>call.type),['price']);assert.equal(creates(h).length,0);assert.equal((await h.db.query('select checkout_key from hood_billing')).rows[0].checkout_key,null);}
+});
+test('malformed active and price features that alter charged quantity or amount fail before reservation',async t=>{
+ const cases=[
+  ['truthy string active',price=>price.active='true'],
+  ['custom unit amount',price=>price.custom_unit_amount={minimum:100,maximum:5000,preset:1500}],
+  ['transformed quantity',price=>price.transform_quantity={divide_by:2,round:'down'}],
+ ];
+ const results=[];
+ for(const [name,mutate] of cases){
+  const h=await harness(t),price=h.prices.get('price_fixed');mutate(price);
+  const error=await h.run().then(()=>null,error=>error),row=(await h.db.query('select checkout_key from hood_billing')).rows[0];
+  results.push({name,status:error?.status,code:error?.code,stripeCalls:h.calls.map(call=>call.type),checkoutKey:row.checkout_key});
+ }
+ assert.deepEqual(results,cases.map(([name])=>({name,status:503,code:'BILLING_SETUP',stripeCalls:['price'],checkoutKey:null})));
 });
 test('unknown Stripe price state denies checkout without durable or payable side effects',async t=>{
  const h=await harness(t);h.controls.priceFail=true;await assert.rejects(h.run(),/terms/);assert.equal(creates(h).length,0);assert.equal((await h.db.query('select checkout_key from hood_billing')).rows[0].checkout_key,null);
