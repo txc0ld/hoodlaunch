@@ -8,19 +8,39 @@ import { digest, fail, origin, readToken } from './public-security';
 export function accountConfigured() { return Boolean(process.env.APP_ORIGIN && process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY && process.env.SUPABASE_SERVICE_ROLE_KEY); }
 export function emailSignInEnabled() { return process.env.EMAIL_SIGNIN_ENABLED === 'true'; }
 export function billingConfigured() { return accountConfigured() && Boolean(process.env.STRIPE_SECRET_KEY && /^price_[A-Za-z0-9]+$/.test(process.env.STRIPE_PRO_PRICE_ID || '')); }
-export function database() {
+function databaseClient(requestFetch: typeof fetch) {
   origin();
   if (!accountConfigured()) fail(503, 'SETUP_REQUIRED', 'Account services are not configured yet.');
   const url = new URL(process.env.SUPABASE_URL!);
   if (url.protocol !== 'https:' || url.username || url.password) fail(503, 'SETUP_REQUIRED', 'Account services are not configured yet.');
-  return createClient(url.origin, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }, global: { fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(12000) }) } });
+  return createClient(url.origin, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }, global: { fetch: requestFetch } });
 }
+export function database() { return databaseClient((input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(12000) })); }
 export function authClient() { return createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }, global: { fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(12000) }) } }); }
 export function stripeClient() { if (!billingConfigured()) fail(503, 'BILLING_SETUP', 'Pro subscriptions are not on sale yet.'); return new Stripe(process.env.STRIPE_SECRET_KEY!, { timeout: 12000, maxNetworkRetries: 0 }); }
+const QUOTA_TIMEOUT_MS = 3000;
+const QUOTA_RETRY_DELAY_MS = 100;
+const TRANSIENT_QUOTA_STATUSES = new Set([502, 503, 504]);
+function retryableQuotaFailure(status: number, error: { code?: string; message?: string }) {
+  if (TRANSIENT_QUOTA_STATUSES.has(status)) return true;
+  return status === 0 && !error.code && /^(?:TypeError|AbortError|TimeoutError):/.test(error.message || '');
+}
+const quotaFetch: typeof fetch = (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(QUOTA_TIMEOUT_MS) });
 export async function takeQuota(bucket: string, limit: number, seconds: number) {
-  const { data, error } = await database().rpc('hood_take_quota', { p_bucket: bucket, p_limit: limit, p_seconds: seconds });
-  if (error) fail(503, 'QUOTA_UNAVAILABLE', 'Service unavailable. Please try again later.');
-  if (data !== true) fail(429, 'RATE_LIMIT', 'Limit reached. Please try again later.');
+  const database = databaseClient(quotaFetch);
+  const parameters = { p_bucket: bucket, p_limit: limit, p_seconds: seconds };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const { data, error, status } = await database.rpc('hood_take_quota', parameters);
+    if (!error) {
+      if (data === true) return;
+      fail(429, 'RATE_LIMIT', 'Limit reached. Please try again later.');
+    }
+    if (attempt === 0 && retryableQuotaFailure(status, error)) {
+      await new Promise(resolve => setTimeout(resolve, QUOTA_RETRY_DELAY_MS));
+      continue;
+    }
+    fail(503, 'QUOTA_UNAVAILABLE', 'Service unavailable. Please try again later.');
+  }
 }
 export async function account(req: NextApiRequest, required = true): Promise<string | null> {
   const token = readToken(req);
