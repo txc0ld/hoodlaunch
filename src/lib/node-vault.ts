@@ -18,7 +18,9 @@ export interface NodeSession {
 // This module never exposes a signer or secret. Forgetting removes access, but
 // JavaScript cannot guarantee that garbage-collected secret strings are erased.
 export const NODE_IDLE_MS = 15 * 60 * 1000;
-const sessions = new WeakMap<NodeSession, { root: Wallet; expiresAt: number }>();
+type NodeMaterial = { kind: 'hd'; root: Wallet } | { kind: 'imported'; wallets: readonly Wallet[] };
+type NodeState = NodeMaterial & { expiresAt: number };
+const sessions = new WeakMap<NodeSession, NodeState>();
 let kdfInProgress = false;
 
 function validatePassword(password: string): void {
@@ -33,7 +35,7 @@ function validateCount(count: number): void {
   }
 }
 
-function requireSession(session: NodeSession): { root: Wallet } {
+function requireSession(session: NodeSession): NodeState {
   const state = sessions.get(session);
   if (state && Date.now() >= state.expiresAt) sessions.delete(session);
   if (!state || Date.now() >= state.expiresAt) throw new Error('This node session is no longer available. Restore its backup.');
@@ -61,13 +63,13 @@ function deriveAddresses(root: Wallet, count: number): string[] {
   return addresses;
 }
 
-function register(root: Wallet, addresses: readonly string[], backupVerified: boolean): NodeSession {
+function register(material: NodeMaterial, addresses: readonly string[], backupVerified: boolean): NodeSession {
   const session: NodeSession = Object.freeze({
     id: utils.hexlify(utils.randomBytes(16)),
     addresses: Object.freeze([...addresses]),
     backupVerified,
   });
-  sessions.set(session, { root, expiresAt: Date.now() + NODE_IDLE_MS });
+  sessions.set(session, { ...material, expiresAt: Date.now() + NODE_IDLE_MS });
   return session;
 }
 
@@ -145,7 +147,7 @@ export function createNodeSession(count: number): NodeSession {
   try {
     const root = Wallet.createRandom({ path: ROOT_PATH, locale: 'en' });
     const addresses = deriveAddresses(root, count);
-    return register(root, addresses, false);
+    return register({ kind: 'hd', root }, addresses, false);
   } catch {
     throw new Error('Unable to securely generate node wallets.');
   }
@@ -156,6 +158,7 @@ export async function encryptNodeBackup(
 ): Promise<string> {
   validatePassword(password);
   const state = requireSession(session);
+  if (state.kind !== 'hd') throw new Error('Use the original encrypted keystore files to restore these imported wallets.');
   return withKdf(async () => {
     try {
       const encrypted = await state.root.encrypt(password, { scrypt: SCRYPT }, progressObserver(onProgress));
@@ -194,7 +197,7 @@ export async function restoreNodeBackup(
       const addresses = deriveAddresses(root, backup.count);
       if (!addresses.every((address, index) => address === (backup.addresses as string[])[index]) ||
           manifestMac(root, addresses) !== backup.manifestMac) throw new Error('Backup manifest mismatch.');
-      return register(root, addresses, true);
+      return register({ kind: 'hd', root }, addresses, true);
     } catch {
       // Never return ethers errors that may embed secret values or input data.
       throw new Error('Unable to restore backup. Check the file and password.');
@@ -202,18 +205,91 @@ export async function restoreNodeBackup(
   });
 }
 
+// Select signing/export material only inside this module, always bound to the
+// current session and public node index. Imported wallets are never HD siblings.
+function walletAt(session: NodeSession, index: number): Wallet {
+  const state = requireSession(session);
+  if (!Number.isInteger(index) || index < 0 || index >= session.addresses.length) throw new Error('Invalid node index.');
+  const wallet = state.kind === 'hd'
+    ? new Wallet(utils.HDNode.fromMnemonic(state.root.mnemonic.phrase).derivePath(`${ACCOUNT_PATH}/${index}`).privateKey)
+    : state.wallets[index];
+  if (!wallet || wallet.address !== session.addresses[index]) throw new Error('Node address mismatch.');
+  return wallet;
+}
+
+// Deliberately separate from the HD validator: individual exports must have no
+// x-ethers recovery root or any additional/plaintext fields.
+function validateIndividualKeystore(value: unknown): JsonObject {
+  const store = exactObject(value, ['address', 'id', 'version', 'crypto']);
+  requireHex(store.address, 20);
+  if (store.version !== 3 || typeof store.id !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(store.id)) {
+    throw new Error('Invalid keystore version.');
+  }
+  const crypto = exactObject(store.crypto, ['cipher', 'cipherparams', 'ciphertext', 'kdf', 'kdfparams', 'mac']);
+  if (crypto.cipher !== 'aes-128-ctr' || crypto.kdf !== 'scrypt') throw new Error('Unsupported keystore encryption.');
+  const cipherparams = exactObject(crypto.cipherparams, ['iv']);
+  requireHex(cipherparams.iv, 16);
+  requireHex(crypto.ciphertext, 32);
+  requireHex(crypto.mac, 32);
+  const kdf = exactObject(crypto.kdfparams, ['salt', 'n', 'dklen', 'p', 'r']);
+  if (kdf.n !== SCRYPT.N || kdf.r !== SCRYPT.r || kdf.p !== SCRYPT.p || kdf.dklen !== 32) {
+    throw new Error('Unsupported keystore encryption cost.');
+  }
+  requireHex(kdf.salt, 32);
+  return store;
+}
+
+export async function importNodeKeystores(
+  serialized: readonly string[], password: string, onProgress?: (progress: number) => void,
+): Promise<NodeSession> {
+  validatePassword(password);
+  const safeError = () => new Error('Unable to import encrypted keystores. Check the files and shared password.');
+  let inputs: string[];
+  let declared: string[];
+  try {
+    if (!Array.isArray(serialized)) throw safeError();
+    validateCount(serialized.length);
+    inputs = [...serialized]; // Capture every input before any asynchronous work.
+    let total = 0;
+    declared = inputs.map(input => {
+      if (typeof input !== 'string' || input.length > 2048) throw safeError();
+      const bytes = utils.toUtf8Bytes(input).length;
+      total += bytes;
+      if (bytes > 2048 || total > 102400) throw safeError();
+      const store = validateIndividualKeystore(JSON.parse(input));
+      return utils.getAddress(`0x${store.address}`);
+    });
+    if (new Set(declared).size !== declared.length) throw safeError();
+  } catch { throw safeError(); }
+  return withKdf(async () => {
+    const wallets: Wallet[] = [];
+    const report = progressObserver(onProgress);
+    try {
+      report(0);
+      for (let index = 0; index < inputs.length; index += 1) {
+        const wallet = await Wallet.fromEncryptedJson(inputs[index], password,
+          progressObserver(progress => report((index + progress) / inputs.length)));
+        if (wallet.address !== declared[index] || wallets.some(existing => existing.address === wallet.address)) throw safeError();
+        wallets.push(wallet);
+      }
+      // No session exists until the entire selected set authenticates.
+      return register({ kind: 'imported', wallets: Object.freeze([...wallets]) }, declared, true);
+    } catch { throw safeError(); }
+    finally { wallets.length = 0; }
+  });
+}
+
 export async function exportNodeKeystore(
   session: NodeSession, index: number, password: string, onProgress?: (progress: number) => void,
 ): Promise<string> {
   validatePassword(password);
-  const state = requireSession(session);
+  requireSession(session);
   if (!Number.isInteger(index) || index < 0 || index >= session.addresses.length) throw new Error('Invalid node index.');
   return withKdf(async () => {
     try {
-      const node = utils.HDNode.fromMnemonic(state.root.mnemonic.phrase).derivePath(`${ACCOUNT_PATH}/${index}`);
-      // Intentionally discard mnemonic metadata: this keystore controls ONLY
-      // the selected account, not all sibling nodes in the recovery root.
-      const wallet = new Wallet(node.privateKey);
+      // Strip mnemonic metadata for both HD and imported material.
+      const wallet = new Wallet(walletAt(session, index).privateKey);
       if (wallet.address !== session.addresses[index]) throw new Error('Node address mismatch.');
       const encrypted = await wallet.encrypt(password, { scrypt: SCRYPT }, progressObserver(onProgress));
       requireSession(session);
@@ -237,7 +313,7 @@ export function isVerifiedNodeSession(session: NodeSession): boolean {
   try { requireSession(session); return session.backupVerified === true; } catch { return false; }
 }
 
-function requireBridgeNode(session: NodeSession, index: number): { root: Wallet } {
+function requireBridgeNode(session: NodeSession, index: number): NodeState {
   const state = requireSession(session);
   if (!session.backupVerified || !Number.isInteger(index) || index < 0 || index >= session.addresses.length) {
     throw new Error('Restore and verify the backup before bridging a node.');
@@ -249,7 +325,7 @@ export async function prepareNodeBridge(session: NodeSession, index: number, amo
   requireBridgeNode(session, index);
   const { prepareRelayBridge } = await import('./relay-bridge');
   requireBridgeNode(session, index);
-  return prepareRelayBridge(session, index, session.addresses[index], amountEth, () => { requireBridgeNode(session, index); });
+  return prepareRelayBridge(session, index, walletAt(session, index).address, amountEth, () => { requireBridgeNode(session, index); });
 }
 
 export async function executeNodeBridge(session: NodeSession, review: NodeBridgeReview, assertCurrent: () => void = () => {}): Promise<NodeBridgeOperation> {
@@ -260,9 +336,8 @@ export async function executeNodeBridge(session: NodeSession, review: NodeBridge
   requireBridgeNode(session, review.nodeIndex);
   return executeRelayBridge(session, review, () => { requireBridgeNode(session, review.nodeIndex); assertCurrent(); }, async (transaction) => {
     assertCurrent();
-    const state = requireBridgeNode(session, review.nodeIndex);
-    const node = utils.HDNode.fromMnemonic(state.root.mnemonic.phrase).derivePath(`${ACCOUNT_PATH}/${review.nodeIndex}`);
-    const wallet = new Wallet(node.privateKey);
+    requireBridgeNode(session, review.nodeIndex);
+    const wallet = walletAt(session, review.nodeIndex);
     if (wallet.address !== review.nodeAddress) throw new Error('Node address mismatch.');
     const signed = await wallet.signTransaction(transaction);
     assertCurrent();
@@ -279,7 +354,7 @@ export async function prepareNodeTrade(
   const copiedAmount = copyTradeAmount(amount);
   const { prepareTrade } = await import('./node-trading');
   requireBridgeNode(session, index);
-  return prepareTrade(session, index, session.addresses[index], token, side, copiedAmount, () => { requireBridgeNode(session, index); });
+  return prepareTrade(session, index, walletAt(session, index).address, token, side, copiedAmount, () => { requireBridgeNode(session, index); });
 }
 
 export async function executeNodeTrade(
@@ -293,9 +368,8 @@ export async function executeNodeTrade(
   assertActive();
   return executeTrade(session, review, assertActive, async (transaction) => {
     assertActive();
-    const state = requireBridgeNode(session, review.nodeIndex);
-    const node = utils.HDNode.fromMnemonic(state.root.mnemonic.phrase).derivePath(`${ACCOUNT_PATH}/${review.nodeIndex}`);
-    const wallet = new Wallet(node.privateKey);
+    requireBridgeNode(session, review.nodeIndex);
+    const wallet = walletAt(session, review.nodeIndex);
     if (wallet.address !== review.nodeAddress) throw new Error('Node address mismatch.');
     const signed = await wallet.signTransaction(transaction);
     assertActive();

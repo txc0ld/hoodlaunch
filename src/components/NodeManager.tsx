@@ -6,6 +6,7 @@ import {
   exportNodeKeystore,
   forgetNodeSession,
   isVerifiedNodeSession,
+  importNodeKeystores,
   MAX_NODES,
   restoreNodeBackup,
   recordNodeActivity,
@@ -20,7 +21,7 @@ import styles from "./NodeManager.module.css";
 
 const MAX_BACKUP_BYTES = 16 * 1024;
 
-type VaultAction = "idle" | "creating" | "restoring" | "exporting";
+type VaultAction = "idle" | "creating" | "restoring" | "importing" | "exporting";
 
 export interface NodeManagerProps {
   sessionIdentity: string;
@@ -73,6 +74,8 @@ export default function NodeManager({ onSessionChange, sessionIdentity, proEnabl
   const [copyStatus, setCopyStatus] = useState("");
   const createPasswordRef = useRef<HTMLInputElement | null>(null);
   const restorePasswordRef = useRef<HTMLInputElement | null>(null);
+  const importPasswordRef = useRef<HTMLInputElement | null>(null);
+  const importFilesRef = useRef<HTMLInputElement | null>(null);
   const exportPasswordRef = useRef<HTMLInputElement | null>(null);
   const restoreFileRef = useRef<HTMLInputElement | null>(null);
   const selectedNodeRef = useRef<HTMLSelectElement | null>(null);
@@ -104,7 +107,7 @@ export default function NodeManager({ onSessionChange, sessionIdentity, proEnabl
     sessionRef.current=null;
     if(current)forgetNodeSession(current);
     setSession(null);onSessionChange?.(null);setBalances(null);setVaultAction("idle");
-    setVaultError("Wallets locked. Restore your encrypted backup to unlock them. Submitted transaction records remain available.");
+    setVaultError("Wallets locked. Restore your encrypted backup or import your encrypted keystores to unlock them. Submitted transaction records remain available.");
   }
   useEffect(() => {
     const pagehide = () => lockWallets();
@@ -292,6 +295,55 @@ export default function NodeManager({ onSessionChange, sessionIdentity, proEnabl
     }
   }
 
+  async function handleKeystoreImport() {
+    if (busyRef.current || !identityValid.current) return;
+    const passwordInput = importPasswordRef.current;
+    const fileInput = importFilesRef.current;
+    const password = passwordInput?.value || "";
+    const files = Array.from(fileInput?.files || []);
+    const rejectInput = (reason: string) => {
+      if (passwordInput) passwordInput.value = "";
+      if (fileInput) fileInput.value = "";
+      setVaultError(reason);
+    };
+    if (files.length < 1 || files.length > MAX_NODES) { rejectInput("Choose 1–50 encrypted keystore files."); return; }
+    if (files.some(file => file.size > 2048) || files.reduce((total, file) => total + file.size, 0) > 102400) {
+      rejectInput("Each encrypted keystore must be 2 KB or smaller."); return;
+    }
+    if (password.length < 12 || password.length > 128) { rejectInput("Keystore password must be 12–128 characters."); return; }
+    const generation = ++vaultGeneration.current;
+    const current = () => generation === vaultGeneration.current && identityValid.current;
+    busyRef.current = true;
+    setVaultAction("importing"); setVaultProgress(0); setVaultError("");
+    let imported: NodeSession | null = null;
+    try {
+      const serialized: string[] = [];
+      for (const file of files) {
+        serialized.push(await file.text());
+        if (!current()) return;
+      }
+      imported = await importNodeKeystores(serialized, password, progress => {
+        if (current()) setVaultProgress(progress * 100);
+      });
+      if (!current()) { forgetNodeSession(imported); imported = null; return; }
+      const previous = sessionRef.current;
+      const sameWallets = previous?.addresses.length === imported.addresses.length && previous.addresses.every((address, index) => address === imported?.addresses[index]);
+      if (previous && !sameWallets && !replaceConfirmed) {
+        forgetNodeSession(imported); imported = null;
+        setVaultError("These keystores contain different wallets. Confirm replacement before importing them."); return;
+      }
+      attemptRef.current = null; setPending(false);
+      replaceSession(imported); imported = null;
+    } catch {
+      if (imported) forgetNodeSession(imported);
+      if (current()) setVaultError("Unable to import encrypted keystores. Check the files and shared password.");
+    } finally {
+      if (passwordInput) passwordInput.value = "";
+      if (fileInput) fileInput.value = "";
+      if (current()) { busyRef.current = false; setVaultAction("idle"); setVaultProgress(0); }
+    }
+  }
+
   async function handleKeystoreExport() {
     if (busyRef.current || !identityValid.current) return;
     if (!session || !verified) return;
@@ -411,13 +463,20 @@ export default function NodeManager({ onSessionChange, sessionIdentity, proEnabl
             <button className={styles.primaryButton} type="button" onClick={handleCreate} disabled={busy || !identityValid.current || (!pending && !allowance?.available)}>{vaultAction === "creating" ? "Encrypting backup…" : pending ? "Retry backup / request" : session ? "Replace wallets" : "Generate wallet"}</button>
           </div>
           {session && <label className={styles.confirm}><input type="checkbox" checked={replaceConfirmed} onChange={(event) => setReplaceConfirmed(event.target.checked)} disabled={busy} /><span>I understand replacing these wallets forgets the current in-memory session. I have a recoverable encrypted backup.</span></label>}
-          {busy && <div className={styles.progress} role="status" aria-live="polite"><span style={{ width: `${Math.max(2, Math.min(100, vaultProgress))}%` }} /> <small>{vaultAction === "restoring" ? "Restoring" : vaultAction === "exporting" ? "Exporting keystore" : "Encrypting backup"}{vaultProgress ? ` · ${Math.round(vaultProgress)}%` : "…"}</small></div>}
+          {busy && <div className={styles.progress} role="status" aria-live="polite"><span style={{ width: `${Math.max(2, Math.min(100, vaultProgress))}%` }} /> <small>{vaultAction === "restoring" ? "Restoring" : vaultAction === "importing" ? "Importing keystores" : vaultAction === "exporting" ? "Exporting keystore" : "Encrypting backup"}{vaultProgress ? ` · ${Math.round(vaultProgress)}%` : "…"}</small></div>}
 
           <div className={styles.restoreBox}>
             <div><strong>Verify or restore an encrypted backup</strong><small>JSON only · 16 KB maximum</small></div>
             <input ref={restoreFileRef} type="file" accept="application/json,.json" aria-label="Encrypted node backup file" disabled={busy} />
             <input ref={restorePasswordRef} type="password" minLength={12} maxLength={128} autoComplete="current-password" placeholder="Backup password" aria-label="Backup password for restore" disabled={busy} />
             <button className={styles.secondaryButton} type="button" onClick={handleRestore} disabled={busy}>{vaultAction === "restoring" ? "Verifying…" : "Verify and restore"}</button>
+          </div>
+
+          <div className={styles.restoreBox}>
+            <div><strong>Import encrypted keystores</strong><small>Recover existing wallets from 1–50 individual JSON keystores exported by HOODLABS or the original app. Each file must be 2 KB or smaller and use the same password. Keep all original encrypted files for future recovery.</small><small>Wallet order follows the selected-file order; filenames do not determine wallet identity. Importing is local and does not use your generation allowance.</small></div>
+            <input ref={importFilesRef} type="file" multiple accept="application/json,.json" aria-label="Encrypted individual keystore files" disabled={busy} />
+            <input ref={importPasswordRef} type="password" minLength={12} maxLength={128} autoComplete="current-password" placeholder="Shared keystore password" aria-label="Shared keystore password" disabled={busy} />
+            <button className={styles.secondaryButton} type="button" onClick={handleKeystoreImport} disabled={busy}>{vaultAction === "importing" ? "Importing…" : "Import keystores"}</button>
           </div>
 
           {session && <div className={`${styles.sessionStatus} ${verified ? styles.verified : ""}`} role="status">
