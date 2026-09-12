@@ -405,6 +405,7 @@ test('provider failures, malformed data and oversized responses fail once with b
     { name: 'HTTP failure', response: providerResponse([], { ok: false }), code: 'UPLOAD_FAILED' },
     { name: 'missing body', response: providerResponse([], { noBody: true }), code: 'UPLOAD_FAILED' },
     { name: 'malformed JSON', response: providerResponse([Buffer.from('{')]), code: 'UPLOAD_FAILED' },
+    { name: 'null JSON', response: providerResponse([Buffer.from('null')]), code: 'UPLOAD_FAILED' },
     { name: 'invalid CID', response: providerResponse([Buffer.from('{"data":{"cid":"not-a-cid"}}')]), code: 'UPLOAD_FAILED' },
     { name: 'oversized response', response: providerResponse([Buffer.alloc(32769)]), code: 'UPLOAD_FAILED', canceled: true },
     { name: 'reader failure', response: providerResponse([], { readError: true }), code: 'UPLOAD_FAILED' },

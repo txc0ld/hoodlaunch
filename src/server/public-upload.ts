@@ -45,9 +45,10 @@ export async function uploadPublicImage(bytes: Buffer) {
     return fail(502, 'UPLOAD_FAILED', 'Image storage is unavailable. Try again later.');
   }
   const text = Buffer.concat(chunks).toString('utf8');
-  let result: { data?: { cid?: string } };
+  let result: unknown;
   try { result = JSON.parse(text); } catch { return fail(502, 'UPLOAD_FAILED', 'Invalid image storage response.'); }
-  const cid = result.data?.cid;
+  if (!result || typeof result !== 'object' || Array.isArray(result)) fail(502, 'UPLOAD_FAILED', 'Invalid image storage response.');
+  const cid = (result as { data?: { cid?: unknown } | null }).data?.cid;
   if (!isValidCid(cid)) fail(502, 'UPLOAD_FAILED', 'Invalid image storage response.');
   return { uri: `ipfs://${cid}`, cid };
 }
