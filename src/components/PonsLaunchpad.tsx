@@ -179,6 +179,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
   const [storedOperation, setStoredOperation] = useState<LaunchOperation | null>(null);
   const uploadSequence = useRef(0);
   const uploadController = useRef<AbortController | null>(null);
+  const activeUpload = useRef<{ file: File; sessionIdentity: string } | null>(null);
   const uploadSession = useRef(sessionIdentity);
   uploadSession.current = sessionIdentity;
   const fileInput = useRef<HTMLInputElement | null>(null);
@@ -261,11 +262,17 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
     });
   }, [invalidateReview, loadProtocol, reloadWallet]);
 
-  useEffect(() => () => uploadController.current?.abort(), []);
+  useEffect(() => () => {
+    uploadSequence.current += 1;
+    uploadController.current?.abort();
+    uploadController.current = null;
+    activeUpload.current = null;
+  }, []);
   useEffect(() => {
     uploadSequence.current += 1;
     uploadController.current?.abort();
     uploadController.current = null;
+    activeUpload.current = null;
     setPreviewUrl("");
     setSelectedImage(null);
     setImageState("idle");
@@ -363,10 +370,15 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
       setImageError("Sign in to upload an image, or use an existing public image URI.");
       return;
     }
+    // A browser can deliver the same File object twice before React commits the
+    // uploading state. Keep this fence synchronous so the duplicate does not
+    // consume another upload attempt or restart the active request.
+    if (activeUpload.current?.file === file && activeUpload.current.sessionIdentity === sessionIdentity && !uploadController.current?.signal.aborted) return;
     const sequence = ++uploadSequence.current;
     const accountSession = sessionIdentity;
     uploadController.current?.abort();
     uploadController.current = null;
+    activeUpload.current = null;
     if (!IMAGE_TYPES.has(file.type)) {
       setImageState("error");
       setImageError("Choose a PNG, JPEG, or WebP image.");
@@ -379,6 +391,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
     }
     const controller = new AbortController();
     uploadController.current = controller;
+    activeUpload.current = { file, sessionIdentity: accountSession };
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(URL.createObjectURL(file));
     setSelectedImage(file);
@@ -396,12 +409,19 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
       if (controller.signal.aborted || sequence !== uploadSequence.current || uploadSession.current !== accountSession) return;
       setImageState("error");
       setImageError(errorMessage(error));
+    } finally {
+      if (sequence === uploadSequence.current && uploadController.current === controller) {
+        uploadController.current = null;
+        activeUpload.current = null;
+      }
     }
   }, [previewUrl, sessionIdentity, updateDraft]);
 
   const removeImage = useCallback(() => {
     uploadSequence.current += 1;
     uploadController.current?.abort();
+    uploadController.current = null;
+    activeUpload.current = null;
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl("");
     setSelectedImage(null);
@@ -587,7 +607,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
               {previewUrl && <button type="button" className={styles.removeImage} onClick={removeImage} aria-label="Remove token image"><Icon name="close" /></button>}
               <input ref={fileInput} className={styles.hiddenInput} type="file" accept="image/png,image/jpeg,image/webp" onChange={(event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (file) void uploadImage(file); }} aria-label="Choose token image" />
             </div> : <div className={styles.guestUpload}><Icon name="image" /><span><strong>Upload from your device</strong><small>Free and Pro · 4 MB max · uploads are public on IPFS.</small></span><a href="#pro-account">Sign in to upload</a></div>}
-            <details className={styles.inlineDisclosure}><summary>Use an existing image URI</summary><label className={styles.field}><span>Public image URI</span><input value={draft.logo} maxLength={2048} placeholder="ipfs://… or https://…" aria-label="Token image URI" onChange={event=>{uploadSequence.current++;uploadController.current?.abort();if(previewUrl)URL.revokeObjectURL(previewUrl);setPreviewUrl("");setSelectedImage(null);setImageState("idle");setImageError("");updateDraft("logo",event.target.value);}} /><small>Available without an account. IPFS and HTTPS images must already be public.</small></label></details>
+            <details className={styles.inlineDisclosure}><summary>Use an existing image URI</summary><label className={styles.field}><span>Public image URI</span><input value={draft.logo} maxLength={2048} placeholder="ipfs://… or https://…" aria-label="Token image URI" onChange={event=>{uploadSequence.current++;uploadController.current?.abort();uploadController.current=null;activeUpload.current=null;if(previewUrl)URL.revokeObjectURL(previewUrl);setPreviewUrl("");setSelectedImage(null);setImageState("idle");setImageError("");updateDraft("logo",event.target.value);}} /><small>Available without an account. IPFS and HTTPS images must already be public.</small></label></details>
             {imageState === "error" && <div className={styles.inlineError} role="alert"><span>{imageError}</span>{selectedImage && <button type="button" onClick={() => void uploadImage(selectedImage)}>Retry upload</button>}</div>}
           </div>
 
