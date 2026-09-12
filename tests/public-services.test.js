@@ -60,7 +60,7 @@ test('Stripe active status exact customer price quantity and current period are 
  assert.equal(svc.eligibleSubscription(s,'cus_test','price_other'),false);
 });
 test('unauthenticated upload cannot consume provider quota',async()=>{
- let calls=0;const handler=load('pages/api/token-image.ts',{'../../src/server/public-services':{requirePro:async()=>security.fail(401,'SIGN_IN','Sign in.'),takeQuota:async()=>{calls++;}},'../../src/server/public-security':security,'../../src/server/public-upload':{IMAGE_LIMIT:4e6,sanitizeImage:async()=>{calls++;},uploadPublicImage:async()=>{calls++;}}}).default;
+ let calls=0;const handler=load('pages/api/token-image.ts',{'../../src/server/public-image-access':{resolvePublicImageAccess:async()=>security.fail(401,'SIGN_IN','Sign in.'),reservePublicImageUpload:async()=>{calls++;}},'../../src/server/public-security':security,'../../src/server/public-upload':{IMAGE_LIMIT:4e6,sanitizeImage:async()=>{calls++;},uploadPublicImage:async()=>{calls++;}}}).default;
  const res=response();await handler(request({}, {'content-type':'image/png'}),res);assert.equal(res.code,401);assert.equal(calls,0);
 });
 test('real raster decoder rejects disguised bytes and strips metadata',async()=>{
