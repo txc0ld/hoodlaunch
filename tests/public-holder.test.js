@@ -16,7 +16,7 @@ async function harness(t){const db=new PGlite();await db.exec('create role anon;
   async send(method){calls.push(method);assert.equal(method,'eth_chainId');if(controls.rpcFailure)throw Error('inert RPC outage');return controls.wrongChain?'0x1':'0x1237';}
   async getBlockNumber(){return controls.shortHead || (controls.dropHead && ++headReads>1)?99:100;}
   async getBlock(n){assert.equal(n,controls.shortHead?98:99);return {number:n,hash:'0x'+(controls.reorg && ++blockReads>1?'bb':'aa').repeat(32)};}
-  async getCode(address,n){assert.ok([98,99].includes(n));return address.toLowerCase()==='0x6d5dc12131b2ad8748c54ab1ac1b1a2cc53c2118'?(controls.noToken?'0x':'0x6000'):(controls.contractWallet?'0xef0100'+'12'.repeat(20):'0x');}
+  async getCode(address,n){assert.ok([98,99].includes(n));return address.toLowerCase()==='0x6d5dc12131b2ad8748c54ab1ac1b1a2cc53c2118'?(controls.noToken?'0x':'0x6000'):(Object.hasOwn(controls,'walletCode')?controls.walletCode:controls.contractWallet?'0x6000':'0x');}
   removeAllListeners(){}
  }
  class Contract{constructor(address){assert.equal(ethers.utils.getAddress(address),ethers.utils.getAddress('0x6d5dc12131b2ad8748c54ab1ac1b1a2cc53c2118'));}
@@ -41,6 +41,52 @@ test('an allowlisted wallet grants only after current-session proof, balance che
  let status=await h.access();assert.equal(status.verified,false);assert.equal(status.granted,false);assert.equal(status.eligible,false);
  await prove(h);status=await h.access();assert.equal(status.verified,true);assert.equal(status.granted,true);assert.equal(status.eligible,false);assert.equal(status.balance,'0');
  delete process.env.PRO_WALLET_ALLOWLIST;status=await h.access();assert.equal(status.granted,false);assert.equal(status.eligible,false);
+});
+// All keys/signatures in these cases use the existing public inert fixtures.
+const delegatedCode='0xef0100'+other.address.slice(2);
+test('exact nonzero EIP7702 code keeps original-key proof and exact holder threshold behavior',async t=>{
+ const old=process.env.PRO_WALLET_ALLOWLIST;delete process.env.PRO_WALLET_ALLOWLIST;t.after(()=>{if(old===undefined)delete process.env.PRO_WALLET_ALLOWLIST;else process.env.PRO_WALLET_ALLOWLIST=old;});
+ const h=await harness(t);h.controls.walletCode=delegatedCode;await prove(h);
+ for(const [amount,eligible] of [[THRESHOLD.sub(1),false],[THRESHOLD,true],[THRESHOLD.add(1),true],[ethers.constants.Zero,false]]){
+  h.controls.balance=amount;const status=await h.access();assert.equal(status.verified,true);assert.equal(status.eligible,eligible);assert.equal(status.granted,false);assert.equal(status.balance,amount.toString());
+ }
+ for(const code of ['0x',delegatedCode,delegatedCode.toUpperCase(),delegatedCode.toLowerCase(),'0xef0100'+'0'.repeat(39)+'1']){
+  h.controls.walletCode=code;assert.equal(await h.holder.readHolderBalance(wallet.address),'0');
+ }
+});
+test('delegated allowlisted wallet requires its original key and current-session proof for a grant',async t=>{
+ const old=process.env.PRO_WALLET_ALLOWLIST;process.env.PRO_WALLET_ALLOWLIST=wallet.address;t.after(()=>{if(old===undefined)delete process.env.PRO_WALLET_ALLOWLIST;else process.env.PRO_WALLET_ALLOWLIST=old;});
+ const h=await harness(t);h.controls.walletCode=delegatedCode;h.controls.balance=ethers.constants.Zero;
+ assert.equal((await h.access()).granted,false);const c=await h.challenge();
+ await assert.rejects(()=>h.verify(c,'0x00'));
+ await assert.rejects(async()=>h.verify(c,await other.signMessage(c.message))); // Delegate key is not owner authority.
+ const sig=await wallet.signMessage(c.message);await assert.rejects(()=>h.verify(c,sig,V,T));await assert.rejects(()=>h.verify(c,sig,U,T));
+ for(const changed of [c.message.replace('launch.example.test','evil.example.test'),c.message.replace('Chain ID: 4663','Chain ID: 1'),c.message+' extra'])await assert.rejects(async()=>h.verify(c,await wallet.signMessage(changed)));
+ assert.equal((await h.access()).granted,false);assert.equal((await h.db.query('select * from hood_holder_proofs')).rows.length,0);
+ const outcomes=await Promise.allSettled([h.verify(c,sig),h.verify(c,sig)]);assert.equal(outcomes.filter(x=>x.status==='fulfilled').length,1);
+ await assert.rejects(()=>h.verify(c,sig));const status=await h.access();assert.equal(status.verified,true);assert.equal(status.granted,true);assert.equal(status.eligible,false);
+ for(const flag of ['wrongChain','wrongDecimals','noToken','reorg','dropHead','rpcFailure']){
+  h.controls[flag]=true;const denied=await h.access();assert.equal(denied.verified,false);assert.equal(denied.granted,false);assert.equal(denied.unavailable,true);delete h.controls[flag];
+ }
+ h.controls.dbFailure=true;await assert.rejects(()=>h.access());delete h.controls.dbFailure;
+ h.controls.onBalance=async()=>h.holder.unlinkHolder(h.database,U,S);const denied=await h.access();assert.equal(denied.granted,false);assert.equal(denied.verified,false);
+});
+test('ordinary, malformed and zero-target code fails closed for both proof and existing wallet grants',async t=>{
+ const old=process.env.PRO_WALLET_ALLOWLIST;process.env.PRO_WALLET_ALLOWLIST=wallet.address;t.after(()=>{if(old===undefined)delete process.env.PRO_WALLET_ALLOWLIST;else process.env.PRO_WALLET_ALLOWLIST=old;});
+ const h=await harness(t),c=await h.challenge(),sig=await wallet.signMessage(c.message);
+ const invalid=['0x6000','0xef0100','0xef0100'+'0'.repeat(40),delegatedCode.slice(0,-2),delegatedCode+'00',delegatedCode.slice(0,-1),delegatedCode+'0',delegatedCode.replace('ef0100','ef0101'),delegatedCode.replace('ef0100','ef0000'),'0xef0100'+'gg'.repeat(20),delegatedCode+'\n',' '+delegatedCode,delegatedCode.slice(2),'0x00','',null,undefined,23,{}];
+ for(const code of invalid){h.controls.walletCode=code;await assert.rejects(()=>h.verify(c,sig),error=>error.code==='HOLDER_EOA');}
+ assert.equal((await h.db.query('select * from hood_holder_proofs')).rows.length,0);
+ h.controls.walletCode=delegatedCode;await h.verify(c,sig);assert.equal((await h.access()).granted,true);
+ for(const code of invalid){h.controls.walletCode=code;const denied=await h.access();assert.equal(denied.verified,false);assert.equal(denied.eligible,false);assert.equal(denied.granted,false);assert.equal(denied.unavailable,true);}
+});
+test('delegated proof still rejects provider faults, expiry and session revocation before atomic consume',async t=>{
+ const h=await harness(t);h.controls.walletCode=delegatedCode;const c=await h.challenge(),sig=await wallet.signMessage(c.message);
+ for(const flag of ['wrongChain','wrongDecimals','noToken','reorg','dropHead','rpcFailure','dbFailure']){h.controls[flag]=true;await assert.rejects(()=>h.verify(c,sig));delete h.controls[flag];}
+ h.advance(300000);await assert.rejects(()=>h.verify(c,sig));assert.equal((await h.db.query('select * from hood_holder_proofs')).rows.length,0);
+ const j=await harness(t);j.controls.walletCode=delegatedCode;const d=await j.challenge(),signature=await wallet.signMessage(d.message);
+ j.controls.onBalance=async()=>{await j.db.query('delete from hood_sessions where token_hash=$1',[S]);};await assert.rejects(()=>j.verify(d,signature));
+ assert.equal((await j.db.query('select * from hood_holder_proofs')).rows.length,0);
 });
 test('public Pro terms use exact shared display and entitlement constants',()=>{
  const terms=load('src/lib/pro-access.ts');
@@ -73,7 +119,7 @@ test('one wallet belongs to one account; replacement needs unlink, which invalid
  await assert.rejects(()=>h.challenge(U,S,other.address));const pending=await h.challenge();await h.holder.unlinkHolder(h.database,U,S);await assert.rejects(async()=>h.verify(pending,await wallet.signMessage(pending.message)));
  assert.equal((await h.access()).address,null);const c=await h.challenge(U,S,other.address);await h.verify(c,await other.signMessage(c.message));assert.equal((await h.access()).address,other.address.toLowerCase());
 });
-test('contract/delegated wallets, wrong chain/decimals, missing token and reorg never prove holder access',async t=>{
+test('contract wallets, wrong chain/decimals, missing token and reorg never prove holder access',async t=>{
  const h=await harness(t),c=await h.challenge(),sig=await wallet.signMessage(c.message);
  for(const flag of ['contractWallet','wrongChain','wrongDecimals','noToken','reorg','dropHead','rpcFailure']){h.controls[flag]=true;await assert.rejects(()=>h.verify(c,sig));delete h.controls[flag];}
  await h.verify(c,sig);for(const flag of ['contractWallet','wrongChain','wrongDecimals','noToken','reorg','dropHead','rpcFailure']){h.controls[flag]=true;const result=await h.access();assert.equal(result.eligible,false);assert.equal(result.unavailable,true);delete h.controls[flag];}

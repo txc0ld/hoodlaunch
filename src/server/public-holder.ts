@@ -28,6 +28,12 @@ export async function holderChallenge(db:Db,user:string,session:string,input:unk
   if(await call(db,'hood_holder_challenge',{p_user:user,p_session:session,p_id:challengeId,p_address:address.toLowerCase(),p_nonce:nonce,p_message:text,p_issued:issued,p_expires:expires})!==true)holderError();
   return {challengeId,message:text,address,chainId:HOODRICH_CHAIN_ID};
 }
+function hasEoaSigningAuthority(code:unknown):boolean {
+  if(code==='0x')return true;
+  // EIP-7702 retains the original key's signature authority. Match only its
+  // exact 23-byte designator; a zero target clears code instead of delegating.
+  return typeof code==='string' && code.length===48 && /^0xef0100[0-9a-f]{40}$/i.test(code) && !/^0+$/.test(code.slice(8));
+}
 export async function readHolderBalance(address:string):Promise<string> {
   const p=new providers.JsonRpcProvider({url:RPC,timeout:12000});
   try {
@@ -37,7 +43,7 @@ export async function readHolderBalance(address:string):Promise<string> {
     if(!block || block.number!==number || !/^0x[0-9a-fA-F]{64}$/.test(block.hash))throw Error();
     const token=new Contract(HOODRICH_TOKEN,['function decimals() view returns(uint8)','function balanceOf(address) view returns(uint256)'],p);
     const [code,tokenCode,decimals,balance]=await Promise.all([p.getCode(address,number),p.getCode(HOODRICH_TOKEN,number),token.decimals({blockTag:number}),token.balanceOf(address,{blockTag:number})]);
-    if(code!=='0x')fail(400,'HOLDER_EOA','Use a standard wallet. Contract and delegated wallets are not supported for holder proof yet.');
+    if(!hasEoaSigningAuthority(code))fail(400,'HOLDER_EOA','Use a standard wallet or an EIP-7702 delegated wallet with its original key. Other contract wallets are not supported for holder proof.');
     if(typeof tokenCode!=='string' || !/^0x(?:[0-9a-fA-F]{2})+$/.test(tokenCode) || decimals!==HOODRICH_DECIMALS || !BigNumber.isBigNumber(balance) || balance.lt(0))throw Error();
     const [canonical,currentHead,chain]=await Promise.all([p.getBlock(number),p.getBlockNumber(),p.send('eth_chainId',[])]);
     if(!canonical || canonical.number!==number || canonical.hash!==block.hash || !Number.isSafeInteger(currentHead) || currentHead<number+1 || chain!=='0x1237')throw Error();
@@ -53,7 +59,7 @@ export async function verifyHolder(db:Db,user:string,session:string,id:unknown,s
   if(Date.parse(issued)>Date.now()+30000 || Date.parse(expires)<=Date.now() || Date.parse(expires)-Date.parse(issued)>300000 || c.message!==message(user,session,c.address,id,c.nonce,issued,expires))holderError();
   let recovered:string;try{recovered=utils.verifyMessage(c.message,signature);}catch{return holderError();}
   if(recovered.toLowerCase()!==wallet(c.address).toLowerCase())holderError();
-  await readHolderBalance(c.address); // Also verifies EOA/token/chain; holdings grant eligibility separately.
+  await readHolderBalance(c.address); // Also verifies account code/token/chain; holdings grant eligibility separately.
   if(Date.parse(expires)<=Date.now())holderError();
   if(await call(db,'hood_holder_consume',{p_user:user,p_session:session,p_id:id,p_address:c.address,p_message:c.message})!==true)holderError();
 }
