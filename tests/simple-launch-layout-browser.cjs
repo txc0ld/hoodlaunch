@@ -9,7 +9,7 @@ const root = path.join(__dirname, "..");
 const globalCss = fs.readFileSync(path.join(root, "src/styles/globals.css"), "utf8");
 const launchCss = fs.readFileSync(path.join(root, "src/components/PonsLaunchpad.module.css"), "utf8");
 const tradingCss = fs.readFileSync(path.join(root, "src/components/NodeTrading.module.css"), "utf8");
-const widths = [375, 768, 1024, 1440];
+const widths = [375, 768, 901, 920, 1023, 1024, 1440];
 
 function contained(inner, outer, tolerance = 1) {
   return inner.left >= outer.left - tolerance && inner.right <= outer.right + tolerance;
@@ -63,7 +63,7 @@ function contained(inner, outer, tolerance = 1) {
           const buttons = [...document.querySelectorAll(".tradeButtons button,.customTrade button")];
           const inputs = [...document.querySelectorAll(".customTrade input")];
           return {
-            node: rect(".node"), header: rect(".nodeHeader"), metrics: rect(".metrics"), trades: rect(".tradeGroups"), operation: rect(".operation"),
+            trading: rect(".trading"), node: rect(".node"), header: rect(".nodeHeader"), metrics: rect(".metrics"), trades: rect(".tradeGroups"), operation: rect(".operation"),
             columns: getComputedStyle(node).gridTemplateColumns.split(/\s+/).filter(Boolean),
             tradeColumn: getComputedStyle(document.querySelector(".tradeGroups")).gridColumnStart,
             controlHeights: [...buttons, ...inputs].map((element) => element.getBoundingClientRect().height),
@@ -75,11 +75,12 @@ function contained(inner, outer, tolerance = 1) {
             nodeScrollWidth: node.scrollWidth, nodeClientWidth: node.clientWidth,
           };
         });
-        assert.equal(trading.columns.length, width >= 901 ? 3 : 1, `${width}px ${status} node column count`);
+        assert.equal(trading.columns.length, width >= 1024 ? 3 : 1, `${width}px ${status} node column count`);
+        assert.ok(contained(trading.node, trading.trading), `${width}px ${status} node is clipped by the trading container`);
         assert.equal(trading.clippedChildren, 0, `${width}px ${status} node clips a direct child`);
         assert.ok(trading.nodeScrollWidth <= trading.nodeClientWidth, `${width}px ${status} node overflows`);
         assert.ok(trading.controlHeights.every((height) => height >= 44), `${width}px ${status} trade target is under 44px`);
-        if (width >= 901) {
+        if (width >= 1024) {
           assert.equal(trading.tradeColumn, "3", `${width}px ${status} trade controls are not in column 3`);
           assert.ok(trading.header.left < trading.metrics.left && trading.metrics.left < trading.trades.left, `${width}px ${status} primary row order is wrong`);
           assert.ok(trading.operation.top >= Math.max(trading.header.bottom, trading.metrics.bottom, trading.trades.bottom), `${width}px ${status} operation overlaps or precedes the trade row`);
