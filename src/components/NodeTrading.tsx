@@ -45,6 +45,13 @@ function formatToken(raw: string, decimals: number) {
   try { return utils.commify(utils.formatUnits(raw, decimals)); } catch { return "Unavailable"; }
 }
 
+function visualNumber(value: string) {
+  if (!value.includes(".")) return value;
+  const [whole, fraction] = value.split(".");
+  const trimmed = fraction.replace(/0+$/, "");
+  return trimmed.length > 6 ? `${whole}.${trimmed.slice(0, 6)}…` : trimmed ? `${whole}.${trimmed}` : whole;
+}
+
 function gwei(wei: string) {
   try { return utils.formatUnits(wei, "gwei"); } catch { return "Unavailable"; }
 }
@@ -419,9 +426,9 @@ export default function NodeTrading({ session, launchedTokenAddress = "" }: Node
                 const blocked = Boolean(storageError || (operation && (operation.status === "pending" || operation.status === "unknown")));
                 return <article className={styles.node} key={address}>
                   <div className={styles.nodeHeader}><div><span>Node {index + 1}</span><code title={address}>{shortAddress(address)}</code></div>{operation && <em>{operation.status}</em>}</div>
-                  <dl className={styles.metrics}><div><dt>ETH balance</dt><dd>{balance ? `${formatEth(balance.ethBalanceWei)} ETH` : "Unavailable"}</dd></div><div><dt>{snapshot.symbol} balance</dt><dd>{balance ? formatToken(balance.tokenBalanceRaw, snapshot.decimals) : "Unavailable"}</dd></div><div><dt>Share of supply</dt><dd>{balance ? `${balance.supplySharePercent}%` : "Unavailable"}</dd></div></dl>
+                  <dl className={styles.metrics}><div><dt>ETH balance</dt><dd title={balance ? `${formatEth(balance.ethBalanceWei)} ETH` : undefined}>{balance ? `${visualNumber(formatEth(balance.ethBalanceWei))} ETH` : "Unavailable"}</dd></div><div><dt>{snapshot.symbol} balance</dt><dd title={balance ? formatToken(balance.tokenBalanceRaw, snapshot.decimals) : undefined}>{balance ? visualNumber(formatToken(balance.tokenBalanceRaw, snapshot.decimals)) : "Unavailable"}</dd></div><div><dt>Share of supply</dt><dd title={balance ? `${balance.supplySharePercent}%` : undefined}>{balance ? `${visualNumber(balance.supplySharePercent)}%` : "Unavailable"}</dd></div></dl>
                   {storageError && <div className={styles.alert} role="alert"><span>{storageError}</span><button type="button" onClick={() => retryStorage(address)}>Retry status check</button></div>}
-                  {operation && <div className={styles.operation}><strong>{operationLabel(operation)}</strong><p>{operation.message}</p><dl><div><dt>Recorded token</dt><dd>{operation.tokenAddress}</dd></div><div><dt>Action</dt><dd>{operation.action}</dd></div><div><dt>Transaction</dt><dd>{operation.txHash}</dd></div></dl>{(operation.status === "pending" || operation.status === "unknown") && <button className={styles.secondaryButton} type="button" onClick={() => handleRefreshOperation(address)} disabled={action !== "idle"}>{action === "refreshing" ? "Checking status…" : "Refresh transaction status"}</button>}</div>}
+                  {operation && <div className={styles.operation}><strong>{operationLabel(operation)}</strong>{operation.status !== "confirmed" && <p>{operation.message}</p>}{(operation.status === "pending" || operation.status === "unknown") && <button className={styles.secondaryButton} type="button" onClick={() => handleRefreshOperation(address)} disabled={action !== "idle"}>{action === "refreshing" ? "Checking status…" : "Refresh transaction status"}</button>}<details className={styles.operationDetails}><summary>Transaction details</summary><p>{operation.message}</p><dl><div><dt>Recorded token</dt><dd>{operation.tokenAddress}</dd></div><div><dt>Action</dt><dd>{operation.action}</dd></div><div><dt>Transaction</dt><dd>{operation.txHash}</dd></div></dl></details></div>}
                   <div className={styles.tradeGroups}>
                     {(["buy", "sell"] as const).map((side) => <div className={styles.tradeGroup} key={side}><span>{side === "buy" ? `Buy ${snapshot.symbol} · % of spendable ETH after gas` : `Sell ${snapshot.symbol} · % of holdings`}</span><div className={styles.tradeButtons}>{PERCENTS.map((percent) => <button type="button" key={percent} onClick={() => handlePrepare(index, side, percent)} disabled={!snapshot.tradingAvailable || !balance || blocked || action !== "idle"} aria-label={`${side === "buy" ? "Buy" : "Sell"} ${percent === 100 ? "Max" : `${percent}%`} with node ${index + 1}`}>{percent === 100 ? `${side === "buy" ? "Buy" : "Sell"} Max` : `${percent}%`}</button>)}</div><div className={styles.customTrade}>
                       <label><span>{side === "buy" ? "Custom buy · ETH" : `Custom sell · ${snapshot.symbol}`}</span><input type="text" inputMode="decimal" autoComplete="off" maxLength={116} value={customAmounts[`${address.toLowerCase()}:${side}`] || ""} onChange={(event) => updateCustomAmount(`${address.toLowerCase()}:${side}`, event.target.value)} aria-label={side === "buy" ? `Custom buy ETH for node ${index + 1}` : `Custom sell tokens for node ${index + 1}`} disabled={!snapshot.tradingAvailable || !balance || blocked || action !== "idle"} placeholder={side === "buy" ? "0.001" : "Token amount"} /></label>

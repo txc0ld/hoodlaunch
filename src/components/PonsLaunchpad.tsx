@@ -26,7 +26,7 @@ import { holderFeeLaunchBlocker, holderFeeLaunchDraft, rememberHolderFeeIntent, 
 import type { HolderFeeLaunchBinding } from "../lib/pons-holder-fees";
 import LabHero from "./LabHero";
 import PairSelector from "./PairSelector";
-import TokenLab, { PonsLaunchPlan } from "./TokenLab";
+import { PonsLaunchPlan } from "./TokenLab";
 import { applyPonsPlan, getPonsPlanningSnapshot, type PonsPlanInput } from "../lib/pons-planning";
 import MobileWalletConnect from "./MobileWalletConnect";
 import WalletConnection from "./WalletConnection";
@@ -138,11 +138,11 @@ function WalletWorkspace({ sessionIdentity, proEnabled, generationEnabled, nodeT
   }, []);
   const canTrade = generationEnabled && nodeTradingEnabled && Boolean(sessionIdentity) && proEnabled;
   return <>
+    {children}
     <section id="wallet-workspace" className={styles.integrationSlot} aria-label="Wallet generator" tabIndex={-1}>
-      <div className={styles.workspaceIntro}><p className={styles.eyebrow}>WALLET WORKSPACE</p><h2>Wallet generator</h2><p>Create wallets, verify an encrypted backup, and restore access when you return. Free accounts can create one wallet every 24 hours; Pro supports up to 50 per attempt.</p></div>
+      <div className={styles.workspaceIntro}><p className={styles.eyebrow}>03 / WALLETS</p><h2>Wallet workspace</h2><p>Generate or restore controlled wallets, verify the backup, then <a href="#node-trading">load a token to trade</a>.</p></div>
       {!generationEnabled ? <p className={styles.pendingNotice} role="status">Wallet creation and recovery are currently unavailable.</p> : !sessionIdentity ? <p className={styles.pendingNotice}><a href="#pro-account">Sign in to create or restore wallets.</a></p> : <NodeManager sessionIdentity={sessionIdentity} proEnabled={proEnabled} financeEnabled={proEnabled && financeEnabled} onSessionChange={acceptSession} />}
     </section>
-    {children}
     {canTrade ? <NodeTrading session={nodeSession} launchedTokenAddress={launchedTokenAddress} /> : <section id="node-trading" className={styles.pendingNotice} tabIndex={-1} aria-labelledby="trading-unavailable-title"><h2 id="trading-unavailable-title">Multi-wallet buying & selling</h2><span>Trade existing native ETH-paired PONS tokens using your verified wallets. Trading availability is separate from launching a new token.</span>{!generationEnabled || !nodeTradingEnabled ? <p role="status">Multi-wallet trading is currently unavailable.</p> : !sessionIdentity ? <a href="#pro-account">Sign in with Pro access to use multi-wallet trading.</a> : <p>Multi-wallet trading requires Pro. <a href="#pro-account">Check your account access.</a></p>}</section>}
   </>;
 }
@@ -179,6 +179,8 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
   const [storedOperation, setStoredOperation] = useState<LaunchOperation | null>(null);
   const uploadSequence = useRef(0);
   const uploadController = useRef<AbortController | null>(null);
+  const uploadSession = useRef(sessionIdentity);
+  uploadSession.current = sessionIdentity;
   const fileInput = useRef<HTMLInputElement | null>(null);
   const modalRef = useRef<HTMLElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -260,6 +262,15 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
   }, [invalidateReview, loadProtocol, reloadWallet]);
 
   useEffect(() => () => uploadController.current?.abort(), []);
+  useEffect(() => {
+    uploadSequence.current += 1;
+    uploadController.current?.abort();
+    uploadController.current = null;
+    setPreviewUrl("");
+    setSelectedImage(null);
+    setImageState("idle");
+    setImageError("");
+  }, [sessionIdentity]);
   useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
   const modalOpen = ["review", "submitting", "pending", "success"].includes(submitState);
   useEffect(() => {
@@ -347,7 +358,15 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
   }, [draft, exemptions, imageState, protocol, selectedConfig, isCustomPair, pairAsset, holderFeesRequested]);
 
   const uploadImage = useCallback(async (file: File) => {
-    if(!proEnabled)return;
+    if (!sessionIdentity) {
+      setImageState("error");
+      setImageError("Sign in to upload an image, or use an existing public image URI.");
+      return;
+    }
+    const sequence = ++uploadSequence.current;
+    const accountSession = sessionIdentity;
+    uploadController.current?.abort();
+    uploadController.current = null;
     if (!IMAGE_TYPES.has(file.type)) {
       setImageState("error");
       setImageError("Choose a PNG, JPEG, or WebP image.");
@@ -358,8 +377,6 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
       setImageError("Image must be 4 MB or smaller.");
       return;
     }
-    const sequence = ++uploadSequence.current;
-    uploadController.current?.abort();
     const controller = new AbortController();
     uploadController.current = controller;
     if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -372,15 +389,15 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
       const response = await fetch("/api/token-image", { method: "POST", headers: { "Content-Type": file.type }, body: file, signal: controller.signal });
       const payload = await response.json() as { uri?: string; cid?: string; gatewayUrl?: string; error?: string };
       if (!response.ok || !payload.uri) throw new Error(payload.error || "Image upload failed.");
-      if (sequence !== uploadSequence.current) return;
+      if (sequence !== uploadSequence.current || uploadSession.current !== accountSession) return;
       updateDraft("logo", payload.uri);
       setImageState("uploaded");
     } catch (error) {
-      if (controller.signal.aborted || sequence !== uploadSequence.current) return;
+      if (controller.signal.aborted || sequence !== uploadSequence.current || uploadSession.current !== accountSession) return;
       setImageState("error");
       setImageError(errorMessage(error));
     }
-  }, [previewUrl, updateDraft, proEnabled]);
+  }, [previewUrl, sessionIdentity, updateDraft]);
 
   const removeImage = useCallback(() => {
     uploadSequence.current += 1;
@@ -392,7 +409,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
     setImageError("");
     updateDraft("logo", "");
     if (fileInput.current) fileInput.current.value = "";
-  }, [previewUrl, updateDraft, proEnabled]);
+  }, [previewUrl, updateDraft]);
 
   function handleConnect() {
     if (walletBusy || walletSelectionOpen) return;
@@ -516,10 +533,10 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
 
   return (
     <main className={styles.page}>
-      <a className={styles.skipLink} href="#launch">Skip to launch workspace</a>
+      <a className={styles.skipLink} href="#pro-account">Skip to account</a>
       <nav className={styles.nav} aria-label="Primary navigation">
         <a className={styles.brand} href="https://labs.hoodrich.rip" target="_blank" rel="noreferrer" aria-label="Open HOODLABS website"><span className={styles.brandMark}>H</span><span aria-hidden="true">𝖍𝖔𝖔𝖉𝖑𝖆𝖇𝖘<small>BY HOODRICH</small></span></a>
-        <div className={styles.navLinks}><a href="#wallet-workspace">Wallets</a><a href="#node-trading">Buy & sell</a><a href="#launch">Launch</a><a href="#pons-plan">Plan</a><a href="#pro-account">Account</a></div>
+        <div className={styles.navLinks}><a href="#pro-account"><span>01</span>Account</a><a href="#launch"><span>02</span>Create</a><a href="#wallet-workspace"><span>03</span>Wallets</a></div>
         <div className={styles.walletControls}>
         {wallet ? (
           <button className={styles.walletButton} type="button" onClick={wrongChain ? handleSwitch : undefined} disabled={walletBusy}>
@@ -531,14 +548,14 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
       </nav>
 
       <LabHero />
-      <nav className={styles.utilityNav} aria-label="HOODLABS resources"><span>GET READY</span><a href="/guide" target="_blank" rel="noopener noreferrer">How it works</a><a href="/pro" target="_blank" rel="noopener noreferrer">Free vs Pro</a><a href="/exchanges" target="_blank" rel="noopener noreferrer">Fund wallets</a><a href="/security" target="_blank" rel="noopener noreferrer">Stay safe</a></nav>
+      {proPanel}
       {!launchEnabled && <p className={styles.pendingNotice} role="status">Token launch preview — live launching is not enabled yet. Wallet creation and trading have separate availability below.</p>}
       <WalletWorkspace key={JSON.stringify([sessionIdentity, proEnabled, generationEnabled, nodeTradingEnabled, financeEnabled])} sessionIdentity={sessionIdentity} proEnabled={proEnabled} generationEnabled={generationEnabled} nodeTradingEnabled={nodeTradingEnabled} financeEnabled={financeEnabled} launchedTokenAddress={receipt?.pairToken ? "" : receipt?.tokenAddress || ""}>
 
       <section id="launch" className={styles.shell} aria-labelledby="launch-title">
         <div className={styles.formPane}>
           <div className={styles.headingRow}>
-            <div><p className={styles.eyebrow}>STEP 01 / BUILD YOUR TOKEN</p><h2 id="launch-title">Prepare your launch</h2><p>Add the public details, choose a pair, then review terms read directly from PONS.</p></div>
+            <div><p className={styles.eyebrow}>02 / CREATE</p><h2 id="launch-title">Create your token</h2><p>Add the essentials, choose a pair, then review live PONS terms.</p></div>
             <span className={styles.chainBadge}>Chain 4663</span>
           </div>
 
@@ -554,7 +571,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
 
           <div className={styles.field}>
             <span>Token image</span>
-            {proEnabled && <div
+            {sessionIdentity ? <div
               className={`${styles.dropzone} ${dragging ? styles.dragging : ""}`}
               onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
               onDragLeave={() => setDragging(false)}
@@ -563,20 +580,15 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
               {previewUrl ? <img className={styles.imagePreview} src={previewUrl} alt="Selected token artwork preview" /> : <span className={styles.imagePlaceholder}><Icon name="image" /></span>}
               <div className={styles.uploadCopy}>
                 <button type="button" className={styles.textButton} onClick={() => fileInput.current?.click()}>{previewUrl ? "Replace image" : "Choose image"}</button>
-                <small>PNG, JPEG or WebP · 4 MB max</small>
-                {imageState === "uploading" && <span className={styles.uploadStatus}><Icon name="spinner" /> Uploading securely…</span>}
+                <small>PNG, JPEG or WebP · 4 MB max · Uploads are public on IPFS.</small>
+                {imageState === "uploading" && <span className={styles.uploadStatus}><Icon name="spinner" /> Uploading…</span>}
                 {imageState === "uploaded" && <span className={styles.successText}><Icon name="check" /> Uploaded</span>}
               </div>
               {previewUrl && <button type="button" className={styles.removeImage} onClick={removeImage} aria-label="Remove token image"><Icon name="close" /></button>}
               <input ref={fileInput} className={styles.hiddenInput} type="file" accept="image/png,image/jpeg,image/webp" onChange={(event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (file) void uploadImage(file); }} aria-label="Choose token image" />
-            </div>}
-            <label className={styles.field}><span>Existing image URI</span><input value={draft.logo} maxLength={2048} placeholder="ipfs://… or https://…" aria-label="Token image URI" onChange={event=>{uploadSequence.current++;uploadController.current?.abort();if(previewUrl)URL.revokeObjectURL(previewUrl);setPreviewUrl("");setSelectedImage(null);setImageState("idle");setImageError("");updateDraft("logo",event.target.value);}} /><small>Use an existing public image. Pro adds managed uploads.</small></label>
+            </div> : <div className={styles.guestUpload}><Icon name="image" /><span><strong>Upload from your device</strong><small>Free and Pro · 4 MB max · uploads are public on IPFS.</small></span><a href="#pro-account">Sign in to upload</a></div>}
+            <details className={styles.inlineDisclosure}><summary>Use an existing image URI</summary><label className={styles.field}><span>Public image URI</span><input value={draft.logo} maxLength={2048} placeholder="ipfs://… or https://…" aria-label="Token image URI" onChange={event=>{uploadSequence.current++;uploadController.current?.abort();if(previewUrl)URL.revokeObjectURL(previewUrl);setPreviewUrl("");setSelectedImage(null);setImageState("idle");setImageError("");updateDraft("logo",event.target.value);}} /><small>Available without an account. IPFS and HTTPS images must already be public.</small></label></details>
             {imageState === "error" && <div className={styles.inlineError} role="alert"><span>{imageError}</span>{selectedImage && <button type="button" onClick={() => void uploadImage(selectedImage)}>Retry upload</button>}</div>}
-          </div>
-
-          <div className={styles.twoFields}>
-            <label className={styles.field}><span>X profile</span><input value={draft.twitter} onChange={(event) => updateDraft("twitter", event.target.value)} placeholder="x.com/handle" autoComplete="url" /></label>
-            <label className={styles.field}><span>Telegram</span><input value={draft.telegram} onChange={(event) => updateDraft("telegram", event.target.value)} placeholder="t.me/community" autoComplete="url" /></label>
           </div>
 
           <label className={styles.field}><span>Website <small>optional</small></span><input type="url" value={draft.website} onChange={(event) => updateDraft("website", event.target.value)} placeholder="https://your-token.com" autoComplete="url" /><small>Your token’s official website, included in its PONS launch details.</small></label>
@@ -591,12 +603,14 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
 
           <label className={styles.field}><span>Developer buy <small>optional · ETH only</small></span><div className={styles.amountField}><input inputMode="decimal" disabled={isCustomPair} value={draft.developerBuyEth} onChange={(event) => updateDraft("developerBuyEth", event.target.value)} aria-label="Developer buy in ETH" /><strong>ETH</strong></div><small>{isCustomPair ? "Zero for custom quote assets. After launch, use PONS to buy with the selected asset; ETH still pays gas." : "Bought in the launch transaction. Network gas is additional."}</small></label>
 
-          <PonsLaunchPlan snapshot={planningSnapshot} creatorTaxBps={draft.creatorTaxBps} developerBuyEth={draft.developerBuyEth} disabledReason={planningUnavailable ? "Finish the current operation or wait for PONS settings to load." : !planningSnapshot ? "Choose an available PONS configuration and a verified pair to plan your launch." : ""} onApply={applyLaunchPlan} />
-          <label className={styles.checkField}><input type="checkbox" checked={holderFeesRequested} disabled={formBusy} onChange={(event) => { invalidateReview(); setHolderFeesRequested(event.target.checked); }} /><span><strong>Holder fee sharing <small>Free</small></strong><small>Send this token’s future creator fee share to its holders. Currently unavailable pending contract verification. Selecting this blocks launch preparation; turn it off to prepare a normal creator-fee launch.</small></span></label>
-
           <div className={styles.advancedBlock}>
-            <button className={styles.advancedToggle} type="button" onClick={() => setAdvanced((value) => !value)} aria-expanded={advanced}><span>Advanced</span><span className={advanced ? styles.chevronOpen : ""}><Icon name="chevron" /></span></button>
-            {advanced && <div className={styles.advancedFields}>
+            <button className={styles.advancedToggle} type="button" onClick={() => setAdvanced((value) => !value)} aria-expanded={advanced} aria-controls="advanced-launch-settings"><span>Advanced launch settings</span><span className={advanced ? styles.chevronOpen : ""}><Icon name="chevron" /></span></button>
+            {advanced && <div id="advanced-launch-settings" className={styles.advancedFields}>
+              <PonsLaunchPlan snapshot={planningSnapshot} creatorTaxBps={draft.creatorTaxBps} developerBuyEth={draft.developerBuyEth} disabledReason={planningUnavailable ? "Finish the current operation or wait for PONS settings to load." : !planningSnapshot ? "Choose an available PONS configuration and a verified pair to plan your launch." : ""} onApply={applyLaunchPlan} />
+              <div className={styles.twoFields}>
+                <label className={styles.field}><span>X profile</span><input value={draft.twitter} onChange={(event) => updateDraft("twitter", event.target.value)} placeholder="x.com/handle" autoComplete="url" /></label>
+                <label className={styles.field}><span>Telegram</span><input value={draft.telegram} onChange={(event) => updateDraft("telegram", event.target.value)} placeholder="t.me/community" autoComplete="url" /></label>
+              </div>
               {!holderFeesRequested && <label className={styles.field}><span>Fee recipient <small>defaults to connected wallet</small></span><input value={draft.creatorFeeRecipient} onChange={(event) => updateDraft("creatorFeeRecipient", event.target.value)} placeholder="0x…" autoComplete="off" /></label>}
               <div className={styles.twoFields}>
                 <label className={styles.field}><span>Creator tax (%)</span><input type="number" min="0" max={(protocol?.maxCreatorTaxBps ?? 0) / 100} step="0.01" value={draft.creatorTaxBps / 100} onChange={(event) => updateDraft("creatorTaxBps", Math.round(Number(event.target.value || 0) * 100))} /></label>
@@ -608,6 +622,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
               </div>
               <label className={styles.field}><span>Farcaster</span><input value={draft.farcaster} onChange={(event) => updateDraft("farcaster", event.target.value)} placeholder="warpcast.com/" autoComplete="url" /></label>
               <label className={styles.field}><span>Tax exemptions <small>{exemptions.length}/32 · one address per line</small></span><textarea value={exemptionText} onChange={(event) => { invalidateReview(); setExemptionText(event.target.value); }} placeholder="0x…" rows={3} /></label>
+              <label className={styles.checkField}><input type="checkbox" checked={holderFeesRequested} disabled={formBusy} onChange={(event) => { invalidateReview(); setHolderFeesRequested(event.target.checked); }} /><span><strong>Holder fee sharing <small>Free</small></strong><small>Currently unavailable pending contract verification. Selecting this blocks launch preparation.</small></span></label>
             </div>}
           </div>
 
@@ -648,8 +663,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
         <a href={`https://www.ponsfamily.com/launchpad/${receipt.tokenAddress}`} target="_blank" rel="noopener noreferrer">Open this token on PONS →</a>
       </section>}
       </WalletWorkspace>
-      {proPanel}
-      <div id="token-lab" className={styles.integrationSlot}><TokenLab proEnabled={proEnabled} /></div>
+      <footer className={styles.resourceFooter}><strong>HOODLABS resources</strong><nav aria-label="HOODLABS resources"><a href="/guide" target="_blank" rel="noopener noreferrer">How it works</a><a href="/pro" target="_blank" rel="noopener noreferrer">Free vs Pro</a><a href="/exchanges" target="_blank" rel="noopener noreferrer">Fund wallets</a><a href="/security" target="_blank" rel="noopener noreferrer">Security</a></nav></footer>
 
       {prepared && submitState === "review" && <div className={styles.modalBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) invalidateReview(); }}>
         <section ref={modalRef} className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="review-title" tabIndex={-1} onKeyDown={handleModalKeyDown}>

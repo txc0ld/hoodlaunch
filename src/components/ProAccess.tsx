@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import styles from './ProAccess.module.css';
 import { utils } from 'ethers';
-import { EMPTY_PRO_ACCESS, HOODRICH_DECIMALS, HOODRICH_MINIMUM_FORMATTED, HOODRICH_TOKEN, PRO_PRICE_LABEL, type ProAccessState } from '../lib/pro-access';
+import { EMPTY_PRO_ACCESS, HOODRICH_DECIMALS, HOODRICH_MINIMUM_FORMATTED, HOODRICH_TOKEN, type ProAccessState } from '../lib/pro-access';
 import { AUTH_INTENT_EVENT, assertClientAuthCurrent, cancelClientAuth, cancelPendingAuth, completeClientAuth, pendingAuthIds, signInWithWallet, startClientAuth } from '../lib/wallet-signin';
 import { verifyHolderWallet } from '../lib/holder-wallet';
 import { getWalletProvider, getWalletVersion, subscribeWalletProvider } from '../lib/wallet-provider';
@@ -114,40 +114,52 @@ export default function ProAccess({ onAccessChange, onSessionIdentityChange, sal
     } catch (error) { try { if(attempt)await cancelClientAuth(request,attempt.requestId); } catch { if(mounted.current)setUnresolvedAuth(true); } if(mounted.current){try{if(!pendingAuthIds().length){accountMutation.current=false;await refresh();}}catch{}setMessage(error instanceof Error ? error.message : 'Request failed.');} }
     finally { authIntent.current=null; try{accountMutation.current=pendingAuthIds().length>0;}catch{accountMutation.current=true;} if (mounted.current) { setActiveAuthId(null); setUnresolvedAuth(accountMutation.current); setBusy(false); } }
   }
+  const tier = access.pro ? `Pro active · ${access.holder?.granted ? 'wallet grant' : access.holder?.eligible ? 'HOODRICH holder' : 'subscription'}` : access.signedIn ? 'Free account' : 'Signed out';
   return <section id="pro-account" className={styles.panel} aria-labelledby="pro-title">
-    <div><p className={styles.label}>HOODLABS PRO · {PRO_PRICE_LABEL}</p><h2 id="pro-title">One launch. Up to 50 wallets.</h2><p>Token launching stays free. Free accounts can create one wallet every 24 hours when wallet creation is available. Pro adds bulk creation of up to 50 wallets and managed uploads. Subscribe for {PRO_PRICE_LABEL} or qualify by holding {HOODRICH_MINIMUM_FORMATTED} HOODRICH ($RICH).</p></div>
-    {access.pro ? <p className={styles.active}>Pro active{access.holder?.granted ? ' · wallet grant' : access.holder?.eligible ? ' · HOODRICH holder' : ' · subscription'} · 50 upload attempts per day</p> : <p className={styles.note}>Your wallet keys stay in this browser. Account services never receive your seed phrase, backup password or exchange credentials. Network and protocol fees still apply.</p>}
-    {unresolvedAuth && <div role="status"><p>A sign-in attempt needs cancellation before account tools can be used.</p><button disabled={busy} onClick={()=>void retryCancellation()}>Retry cancellation</button></div>}
-    {busy && activeAuthId && <button onClick={()=>void retryCancellation()}>Cancel sign-in</button>}
-    {access.configured && !access.signedIn && access.walletSignInAvailable === true && !unresolvedAuth && <div className={styles.controls}><button disabled={busy} onClick={()=>void walletSignIn()}>Sign in with wallet</button><p>A wallet account is separate from an email account. Use your original sign-in method for an existing subscription.</p></div>}
-    {access.configured && !access.signedIn && access.walletSignInAvailable !== true && access.signInAvailable !== true && <p role="status">Email sign-in is temporarily unavailable. Free launch planning remains available.</p>}
-    {access.configured && !access.signedIn && access.signInAvailable === true && !unresolvedAuth && <form onSubmit={event => { event.preventDefault(); void act(sent ? 'verify-code' : 'request-code'); }} className={styles.controls}>
-      <label>Email<input type="email" autoComplete="email" value={email} onChange={event => { setEmail(event.target.value); setSent(false); }} required maxLength={254} disabled={busy} /></label>
-      {sent && <label>Email code<input inputMode="numeric" autoComplete="one-time-code" value={code} onChange={event => setCode(event.target.value)} pattern="[0-9]{6,8}" required maxLength={8} disabled={busy} /></label>}
-      <button disabled={busy}>{busy ? 'Working…' : sent ? 'Sign in' : 'Email me a code'}</button>
-    </form>}
-    {access.signedIn && <div className={styles.controls}>
-      {((!access.holder?.eligible && !access.holder?.granted) || access.subscription) && <button disabled={busy || !access.billing || (!access.subscription && !salesEnabled)} onClick={() => void act(access.subscription ? 'portal' : 'checkout')}>{access.subscription ? 'Manage subscription' : access.billing && salesEnabled ? 'See Pro price & subscribe' : 'Pro subscriptions coming soon'}</button>}
-      {access.billingAccount === true && <button disabled={busy || !access.billing} onClick={() => void act('portal')}>Manage billing</button>}
-      <button disabled={busy} onClick={() => void act('logout')}>Sign out & lock wallets</button>
-    </div>}
-    {access.signedIn && access.billingAccountUnavailable === true && <p role="status">Billing account status is temporarily unavailable. Refresh before opening billing history.</p>}
-    <div className={styles.holder}>
-      <h3>Hold {HOODRICH_MINIMUM_FORMATTED} HOODRICH to unlock Pro</h3>
-      <p>Keep at least {HOODRICH_MINIMUM_FORMATTED} $RICH in one wallet on Robinhood Chain. Sign in to your account, then verify that wallet with a message. Tokens stay in your wallet; no transfer, approval or gas payment is needed.</p>
-      <p className={styles.note}>Token contract: <a href={'https://robinhoodchain.blockscout.com/token/' + HOODRICH_TOKEN} target="_blank" rel="noopener noreferrer"><code>{HOODRICH_TOKEN}</code></a></p>
-      {access.holder?.address && <p>Linked wallet: <code>{access.holder.address}</code>{holderBalance() !== null && <> · Confirmed balance: {holderBalance()} $RICH</>}</p>}
-      {access.holder?.granted && <p>This verified wallet has an explicit Pro wallet grant. The grant is separate from subscriptions and token holdings.</p>}
-      {access.holder?.unavailable && <p>Token balance verification is temporarily unavailable. An independently verified paid subscription still grants Pro.</p>}
-      {access.holder?.verified && !access.holder.eligible && !access.holder.granted && !access.holder.unavailable && <p>This wallet is verified, but its confirmed balance is below {HOODRICH_MINIMUM_FORMATTED} $RICH.</p>}
-      {access.signedIn && <div className={styles.controls}>
-        <button disabled={busy} onClick={() => void verifyWallet()}>{access.holder?.verified ? 'Verify wallet again' : 'Verify holding wallet'}</button>
-        <button disabled={busy} onClick={() => void refresh()}>Refresh Pro access</button>
-        <button disabled={busy} onClick={() => void act('holder-unlink')}>Unlink holding wallet</button>
-      </div>}
-      <p className={styles.note}>A configured wallet grant still requires account sign-in and the Verify holding wallet proof. Standard wallets and EIP-7702 delegated wallets can verify with their original wallet key. Other smart contract wallets are not supported for this proof. One wallet can link to one account. Unlink before changing wallets, and verify again after signing in to a new session. Balances are rechecked for managed services and about every minute in this workspace. If you fall below the threshold, holder access ends on the next check. Becoming eligible or receiving a wallet grant does not cancel an existing subscription; manage it separately if you choose.</p>
-    </div>
-    {message && <p role="status">{message}</p>}
-    <p className={styles.note}>Images uploaded to IPFS are public and may remain available permanently. Keep recovery backups offline. <a href="/security" target="_blank" rel="noopener noreferrer">Security & recovery</a></p>
+    <header className={styles.header}>
+      <div><p className={styles.label}>01 / ACCOUNT</p><h2 id="pro-title">Connect your account</h2><p>Sign in for image uploads and wallet recovery. Pro unlocks up to 50 wallets and 50 daily uploads.</p></div>
+      <span className={access.pro ? styles.active : styles.tier}>{tier}</span>
+    </header>
+
+    {unresolvedAuth && <div className={styles.alert} role="status"><p>A sign-in attempt needs cancellation before account tools can be used.</p><button disabled={busy} onClick={()=>void retryCancellation()}>Retry cancellation</button></div>}
+    {busy && activeAuthId && <button className={styles.cancel} onClick={()=>void retryCancellation()}>Cancel sign-in</button>}
+
+    {access.configured && !access.signedIn && access.walletSignInAvailable === true && !unresolvedAuth && <div className={styles.primaryRow}><button disabled={busy} onClick={()=>void walletSignIn()}>{busy ? 'Working…' : 'Sign in with wallet'}</button><p>Uses a message only. No transaction, gas, or token approval.</p></div>}
+    {access.configured && !access.signedIn && access.walletSignInAvailable !== true && access.signInAvailable !== true && <p role="status">Email sign-in is temporarily unavailable. Token creation with an existing image URI remains available.</p>}
+    {access.signedIn && !access.pro && <div className={styles.primaryRow}><button disabled={busy} onClick={() => void verifyWallet()}>{access.holder?.verified ? 'Verify holding wallet again' : 'Verify holding wallet for Pro'}</button><p>Free includes 5 uploads per day and one wallet creation every 24 hours.</p></div>}
+    {access.signedIn && access.pro && <div className={styles.primaryRow}><a href="#launch">Continue to token creation</a><p>Pro access is verified by the server for this signed-in session.</p></div>}
+
+    {message && <p className={styles.message} role="status">{message}</p>}
+
+    <details className={styles.details}>
+      <summary>More account details</summary>
+      <div className={styles.detailBody}>
+        {access.configured && !access.signedIn && access.signInAvailable === true && !unresolvedAuth && <form onSubmit={event => { event.preventDefault(); void act(sent ? 'verify-code' : 'request-code'); }} className={styles.controls}>
+          <label>Email<input type="email" autoComplete="email" value={email} onChange={event => { setEmail(event.target.value); setSent(false); }} required maxLength={254} disabled={busy} /></label>
+          {sent && <label>Email code<input inputMode="numeric" autoComplete="one-time-code" value={code} onChange={event => setCode(event.target.value)} pattern="[0-9]{6,8}" required maxLength={8} disabled={busy} /></label>}
+          <button disabled={busy}>{busy ? 'Working…' : sent ? 'Sign in' : 'Email me a code'}</button>
+          <p>A wallet account is separate from an email account. Use the original sign-in method for an existing subscription.</p>
+        </form>}
+        {access.signedIn && <div className={styles.controls}>
+          {((!access.holder?.eligible && !access.holder?.granted) || access.subscription) && <button disabled={busy || !access.billing || (!access.subscription && !salesEnabled)} onClick={() => void act(access.subscription ? 'portal' : 'checkout')}>{access.subscription ? 'Manage subscription' : access.billing && salesEnabled ? 'See Pro price & subscribe' : 'Pro subscriptions coming soon'}</button>}
+          {access.billingAccount === true && <button disabled={busy || !access.billing} onClick={() => void act('portal')}>Manage billing</button>}
+          <button disabled={busy} onClick={() => void refresh()}>Refresh Pro access</button>
+          <button disabled={busy} onClick={() => void act('logout')}>Sign out & lock wallets</button>
+        </div>}
+        {access.signedIn && access.billingAccountUnavailable === true && <p role="status">Billing account status is temporarily unavailable. Refresh before opening billing history.</p>}
+        <div className={styles.holder}>
+          <h3>Holder proof</h3>
+          <p>Hold at least {HOODRICH_MINIMUM_FORMATTED} $RICH on Robinhood Chain, then sign a separate ownership message. Tokens stay in your wallet.</p>
+          <p className={styles.note}>Token contract: <a href={'https://robinhoodchain.blockscout.com/token/' + HOODRICH_TOKEN} target="_blank" rel="noopener noreferrer"><code>{HOODRICH_TOKEN}</code></a></p>
+          {access.holder?.address && <p>Linked wallet: <code>{access.holder.address}</code>{holderBalance() !== null && <> · Confirmed balance: {holderBalance()} $RICH</>}</p>}
+          {access.holder?.granted && <p>This verified wallet has an explicit Pro wallet grant.</p>}
+          {access.holder?.unavailable && <p>Token balance verification is temporarily unavailable. An independently verified paid subscription still grants Pro.</p>}
+          {access.holder?.verified && !access.holder.eligible && !access.holder.granted && !access.holder.unavailable && <p>This wallet is verified, but its confirmed balance is below {HOODRICH_MINIMUM_FORMATTED} $RICH.</p>}
+          {access.signedIn && <div className={styles.controls}><button disabled={busy} onClick={() => void verifyWallet()}>{access.holder?.verified ? 'Verify wallet again' : 'Verify holding wallet'}</button><button disabled={busy} onClick={() => void act('holder-unlink')}>Unlink holding wallet</button></div>}
+          <p className={styles.note}>A wallet grant still requires account sign-in and holder proof. Standard wallets and EIP-7702 delegated wallets can verify with their original wallet key. One wallet links to one account; access is rechecked periodically.</p>
+        </div>
+        <p className={styles.note}>Wallet keys stay in this browser. Account services never receive seed phrases or backup passwords. IPFS uploads are public and may remain available permanently. <a href="/security" target="_blank" rel="noopener noreferrer">Security & recovery</a></p>
+      </div>
+    </details>
   </section>;
 }

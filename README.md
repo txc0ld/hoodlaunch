@@ -1,6 +1,6 @@
 # HOODLABS
 
-Free PONS launching with an external wallet, plus a subscription-or-HOODRICH-holder Pro workspace for up to 50 generated wallets and managed image uploads. Target: **labs.hoodrich.rip**. Keep **www.hoodrich.rip** and its existing Vercel application intact.
+Free PONS launching with an external wallet, signed-in image uploads, and a subscription-or-HOODRICH-holder Pro workspace for up to 50 generated wallets. Target: **labs.hoodrich.rip**. Keep **www.hoodrich.rip** and its existing Vercel application intact.
 
 ## Run
 
@@ -11,7 +11,7 @@ Use Node 24. Run `npm ci`, `npm test`, `npm run typecheck`, `npm run build`, the
 1. Import **txc0ld/hoodlaunch** into a separate Vercel project. Do not reconnect or replace the live `hood-rich` project's repository: that could replace the main website. Set Node 24 and the Next.js framework.
 2. Add **labs.hoodrich.rip** to that project and follow the DNS record Vercel actually provides. Do not guess DNS records or alter the existing root/www records.
 3. Git auto-deployment is initially disabled by `vercel.json`. Use a reviewed preview deployment first; enable the chosen release branch only after validation and protection settings are confirmed.
-4. Free image configuration accepts an existing validated image URI. Managed upload is a Pro service, limited to still PNG/JPEG/WebP, 4MB input, 16MP decode, 1024px output, 50 attempts/user/day, and 1,000 global attempts/day. IPFS files are public and can remain available permanently.
+4. Free image configuration accepts an existing validated image URI without an account. Managed upload is available to signed-in accounts: 5 attempts/user/day for Free, 50 for Pro, and 1,000 global attempts/day. Inputs are still PNG/JPEG/WebP up to 4MB and 16MP; normalized output is WebP, at most 1024px and 1MiB. IPFS files are public and can remain available permanently.
 5. Create a **new business Supabase project**. Apply `db/001_public_services.sql` once, followed by `db/002_holder_pro.sql`. It is additive and must not run on the old operator app's data. Configure email OTP templates to display `{{ .Token }}` instead of relying on a magic-link callback. Use production SMTP, provider rate limits, signup abuse protection, and scheduled expired-session/quota cleanup as shown in the migration.
 6. Set the server-only variables from `.env.example` in Vercel. Use the exact `APP_ORIGIN=https://labs.hoodrich.rip`. Use separate preview/test credentials and an exact preview origin for preview account testing. Never upload the operator `.env.local`, `.local/kraken`, seed phrases or wallet backups.
 7. Use the **HOODLABS Pro** product (`prod_hoodlabs_pro`) in the verified Fantom Labs business account. Use the verified US$15 monthly price `price_1UE8NwBSWo9IPsgCbYePWgJb` (USD1500 cents, monthly). Set its fixed `STRIPE_PRO_PRICE_ID`, business-owned secret key, and set `STRIPE_PORTAL_CONFIGURATION_ID` to the dedicated HOODLABS portal. Test checkout/cancellation/refund/customer isolation in Stripe test mode first. There is no application fee added to PONS transactions. Protocol, bridge, exchange and gas fees are separate.

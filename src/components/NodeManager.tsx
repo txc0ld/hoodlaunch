@@ -443,13 +443,13 @@ export default function NodeManager({ onSessionChange, sessionIdentity, proEnabl
 
   return (
     <section className={styles.manager} aria-labelledby="node-manager-title">
-      <button className={styles.managerToggle} type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-controls="node-manager-panel">
-        <span><span className={styles.eyebrow}>Node wallets</span><strong id="node-manager-title">Prepare controlled funding wallets</strong><small>Encrypted local backup · backup verification · recovery controls</small></span>
+      <button className={styles.managerToggle} type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-controls="node-manager-panel" aria-label="Prepare controlled funding wallets">
+        <span><span className={styles.eyebrow}>Wallet controls</span><strong id="node-manager-title">Generate, import or restore wallets</strong><small>{session ? `${session.addresses.length} loaded · ${verified ? "backup verified" : "verification required"}` : allowance ? `${proEnabled ? "Pro" : "Free"} · ${allowance.available ? `up to ${allowance.maxCount} available now` : "allowance used"}` : "Checking allowance…"}</small></span>
         <span className={open ? styles.chevronOpen : styles.chevron} aria-hidden="true">⌄</span>
       </button>
 
       {session && <button className={styles.secondaryButton} type="button" onClick={lockWallets}>Lock wallets</button>}
-      {open && <div id="node-manager-panel" className={styles.panel}>
+      <div id="node-manager-panel" className={styles.panel} hidden={!open}>
         {financeEnabled && verified && session && <ExchangeFunding addresses={session.addresses} />}
         <div className={styles.step}>
           <div className={styles.stepHeading}><span>1</span><div><h2>Create and verify wallets</h2><p>Keys stay in this tab, which remains a sensitive signing environment. Wallets lock after 15 minutes without activity. Download the encrypted backup, then restore it to prove you can recover the wallets.</p></div></div>
@@ -520,7 +520,7 @@ export default function NodeManager({ onSessionChange, sessionIdentity, proEnabl
             </div>
           </>}
         </div>
-      </div>}
+      </div>
     </section>
   );
 }
