@@ -145,8 +145,8 @@ test('a late positive before the deadline still grants after the other branch de
  h.holder.resolve(h.holding);await h.drain();assert.equal(result.pro,true);assert.equal(result.subscriptionUnavailable,false);assert.equal(h.timers.size,0);
 });
 test('checkout routing uses paid subscription only, while holder API actions authenticate and bind server session',async t=>{
- const {PassThrough}=require('node:stream');const oldOrigin=process.env.APP_ORIGIN,oldLive=process.env.LIVE_LAUNCH_ENABLED;process.env.APP_ORIGIN='https://launch.example.test';process.env.LIVE_LAUNCH_ENABLED='true';
- t.after(()=>{if(oldOrigin===undefined)delete process.env.APP_ORIGIN;else process.env.APP_ORIGIN=oldOrigin;if(oldLive===undefined)delete process.env.LIVE_LAUNCH_ENABLED;else process.env.LIVE_LAUNCH_ENABLED=oldLive;});
+ const {PassThrough}=require('node:stream');const oldOrigin=process.env.APP_ORIGIN,oldSales=process.env.PRO_SALES_ENABLED;process.env.APP_ORIGIN='https://launch.example.test';process.env.PRO_SALES_ENABLED='true';
+ t.after(()=>{if(oldOrigin===undefined)delete process.env.APP_ORIGIN;else process.env.APP_ORIGIN=oldOrigin;if(oldSales===undefined)delete process.env.PRO_SALES_ENABLED;else process.env.PRO_SALES_ENABLED=oldSales;});
  let paid=false,authenticated=true;const calls=[];
  const svc={account:async()=>{if(!authenticated)throw Error('unauthenticated');return U;},takeQuota:async(key,limit,seconds)=>calls.push({quota:key,limit,seconds}),stripeClient:()=>({}),customerFor:async()=> 'cus_test',database:()=>({}),hasSubscription:async()=>paid,getProStatus:async()=>{throw Error('combined status must not route checkout');}};
  const holder={holderChallenge:async(db,user,session,address)=>{calls.push({user,session,address});return {challengeId:'fixture',message:'fixture',address,chainId:4663};},verifyHolder:async()=>calls.push('verified'),unlinkHolder:async()=>calls.push('unlinked')};

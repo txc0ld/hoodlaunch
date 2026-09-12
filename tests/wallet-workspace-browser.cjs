@@ -8,6 +8,9 @@ const ts = require(path.join(DEPS, 'typescript'));
 const source = ts.transpileModule(fs.readFileSync(path.join(ROOT, 'src/components/PonsLaunchpad.tsx'), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX },
 }).outputText;
+const managerSource = ts.transpileModule(fs.readFileSync(path.join(ROOT, 'src/components/NodeManager.tsx'), 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX },
+}).outputText;
 const reactFiles = { react: 'react/cjs/react.development.js', 'react-dom': 'react-dom/cjs/react-dom.development.js', 'react-dom/client': 'react-dom/cjs/react-dom-client.development.js', scheduler: 'scheduler/cjs/scheduler.development.js' };
 const reactSources = Object.fromEntries(Object.entries(reactFiles).map(([name, file]) => [name, fs.readFileSync(path.join(DEPS, file), 'utf8')]));
 const ethers = fs.readFileSync(path.join(DEPS, 'ethers/dist/ethers.umd.js'), 'utf8');
@@ -17,7 +20,7 @@ const reactSources=${JSON.stringify(reactSources)},reactModules={};
 function reactRequire(name){if(reactModules[name])return reactModules[name].exports;const module={exports:{}};reactModules[name]=module;new Function('require','module','exports','process',reactSources[name])(reactRequire,module,module.exports,process);return module.exports;}
 const React=reactRequire('react'),ReactDOM=reactRequire('react-dom/client'),DOM=reactRequire('react-dom');
 const jsx=(type,props,key)=>React.createElement(type,{...props,key}),runtime={jsx,jsxs:jsx,Fragment:React.Fragment};
-window.__test={callbacks:[],forgets:[],layoutCallbacks:0,signs:0,broadcasts:0};
+window.__test={callbacks:[],forgets:[],layoutCallbacks:0,signs:0,broadcasts:0,bridgeMounts:0,fundingMounts:0};
 const live=new Set();
 function Manager(props){
  React.useLayoutEffect(()=>{__test.callbacks.push(props.onSessionChange);return()=>{__test.layoutCallbacks++;props.onSessionChange({id:'stale-layout',addresses:[]});};},[]);
@@ -38,6 +41,21 @@ const modules={
 };
 const module={exports:{}};
 new Function('require','module','exports',${JSON.stringify(source)})(id=>modules[id]||(id.endsWith('.css')?{default:new Proxy({},{get:(_,k)=>String(k)})}:{default:noop}),module,module.exports);
+window.useActualManager=()=>{
+ Object.assign(modules['../lib/node-vault'],{
+  MAX_NODES:50,
+  async restoreNodeBackup(){const session={id:'restored-fixture',addresses:['0x1111111111111111111111111111111111111111'],backupVerified:true};live.add(session);return session;},
+  isVerifiedNodeSession:s=>live.has(s)&&s.backupVerified,
+  recordNodeActivity(){}
+ });
+ modules['../lib/node-generation']={GenerationError:class extends Error{},nodeGenerationRequest:async identity=>({sessionIdentity:identity,enabled:true,available:true,maxCount:50,nextEligibleAt:null})};
+ modules['../lib/node-balances']={getNodeBalances:async()=>{throw Error('No balance reads expected');}};
+ modules['./NodeBridge']={default:()=>{__test.bridgeMounts++;return jsx('div',{'data-bridge':true});}};
+ modules['./ExchangeFunding']={default:()=>{__test.fundingMounts++;return jsx('div',{'data-funding':true});}};
+ const managerModule={exports:{}};
+ new Function('require','module','exports',${JSON.stringify(managerSource)})(id=>modules[id]||(id.endsWith('.css')?{default:new Proxy({},{get:(_,k)=>String(k)})}:{default:noop}),managerModule,managerModule.exports);
+ modules['./NodeManager'].default=managerModule.exports.default;
+};
 const root=ReactDOM.createRoot(document.getElementById('root'));
 window.renderWorkspace=props=>DOM.flushSync(()=>root.render(jsx(module.exports.default,props)));
 window.publishSession=id=>{const session={id,addresses:[]};live.add(session);DOM.flushSync(()=>__test.callbacks.at(-1)(session));window.currentSession=session;};
@@ -53,8 +71,8 @@ const html = '<!doctype html><div id="root"></div><script>' + ethers.replace(/<\
   const page=await context.newPage(), errors=[];
   page.on('pageerror',error=>errors.push(error.message));
   await page.goto('http://localhost:41895/');
-  const base={sessionIdentity:'a'.repeat(64),proEnabled:true,generationEnabled:true,nodeTradingEnabled:true,launchEnabled:false};
-  for(const [name,change] of Object.entries({account:{sessionIdentity:'b'.repeat(64)},logout:{sessionIdentity:null},pro:{proEnabled:false},generation:{generationEnabled:false},trading:{nodeTradingEnabled:false},launch:{launchEnabled:true}})){
+  const base={sessionIdentity:'a'.repeat(64),proEnabled:true,generationEnabled:true,nodeTradingEnabled:true,launchEnabled:false,financeEnabled:true};
+  for(const [name,change] of Object.entries({account:{sessionIdentity:'b'.repeat(64)},logout:{sessionIdentity:null},pro:{proEnabled:false},generation:{generationEnabled:false},trading:{nodeTradingEnabled:false},finance:{financeEnabled:false}})){
    await page.evaluate(props=>renderWorkspace(props),base);
    await page.evaluate(id=>publishSession(id),name);
    assert.equal(await page.locator('[data-trading]').getAttribute('data-trading'),name);
@@ -73,9 +91,39 @@ const html = '<!doctype html><div id="root"></div><script>' + ethers.replace(/<\
    await page.evaluate(()=>{oldCallback(null);oldCallback({id:'late-old',addresses:[]});});
    assert.equal(await page.locator('[data-trading]').getAttribute('data-trading'),'new-owner');
   }
+  // Launch capability changes must not affect the independent wallet owner.
+  await page.evaluate(props=>renderWorkspace(props),base);
+  await page.evaluate(()=>publishSession('launch-independent'));
+  await page.evaluate(props=>renderWorkspace({...props,launchEnabled:true}),base);
+  assert.equal(await page.locator('[data-trading]').getAttribute('data-trading'),'launch-independent');
+  assert.equal(await page.locator('[data-manager]').getAttribute('data-finance'),'true');
+  // Exercise actual PonsLaunchpad + NodeManager with an inert verified-vault
+  // fixture. No encryption, secrets, external providers or real funds involved.
+  await page.evaluate(props=>{useActualManager();renderWorkspace({...props,launchEnabled:true,financeEnabled:false});},base);
+  async function restoreFixture(){
+   await page.getByRole('button',{name:/Prepare controlled funding wallets/}).click();
+   await page.getByLabel('Encrypted node backup file').setInputFiles({name:'inert-fixture.json',mimeType:'application/json',buffer:Buffer.from('{}')});
+   await page.getByLabel('Backup password for restore').fill('inert fixture password');
+   await page.getByRole('button',{name:'Verify and restore',exact:true}).click();
+   await page.getByText('1 wallets verified',{exact:true}).waitFor();
+  }
+  await restoreFixture();
+  assert.equal(await page.locator('[data-trading]').getAttribute('data-trading'),'restored-fixture');
+  assert.equal(await page.locator('[data-bridge], [data-funding]').count(),0);
+  assert.deepEqual(await page.evaluate(()=>[__test.bridgeMounts,__test.fundingMounts]),[0,0]);
+  await page.evaluate(props=>renderWorkspace({...props,launchEnabled:false,financeEnabled:false}),base);
+  assert.equal(await page.locator('[data-trading]').getAttribute('data-trading'),'restored-fixture');
+  // Positive control: the finance flag alone exposes the verified-wallet tools.
+  await page.evaluate(props=>renderWorkspace({...props,launchEnabled:false,financeEnabled:true}),base);
+  await restoreFixture();
+  assert.equal(await page.locator('[data-bridge]').count(),1);
+  assert.equal(await page.locator('[data-funding]').count(),1);
+  await page.evaluate(props=>renderWorkspace({...props,launchEnabled:true,financeEnabled:false}),base);
+  assert.equal(await page.locator('[data-bridge], [data-funding]').count(),0);
+  assert.equal(await page.locator('[data-trading]').getAttribute('data-trading'),'none');
   const observed=await page.evaluate(()=>__test);
   assert.ok(observed.layoutCallbacks>=6);assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({pass:true,cases:6,layoutCallbacks:observed.layoutCallbacks,signs:observed.signs,broadcasts:observed.broadcasts,scope:'Actual PonsLaunchpad with mocked financial children and vault; core covered by separate suite.'}));
+  console.log(JSON.stringify({pass:true,cases:6,layoutCallbacks:observed.layoutCallbacks,signs:observed.signs,broadcasts:observed.broadcasts,launchTogglePreservesSession:true,verifiedVaultFinanceGate:true,scope:'Actual PonsLaunchpad and NodeManager with mocked vault, trading and provider children; no funded execution.'}));
   await context.close();
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exit(1);});

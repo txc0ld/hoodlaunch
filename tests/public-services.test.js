@@ -18,7 +18,7 @@ test.after(()=>{if(original===undefined)delete process.env.APP_ORIGIN;else proce
 function request(body={},extra={}) { const req=new PassThrough();req.method='POST';req.rawHeaders=['Origin','https://launch.example.com'];req.headers={origin:'https://launch.example.com','content-type':'application/json',...extra};process.nextTick(()=>req.end(Buffer.from(JSON.stringify(body))));return req; }
 function response() { return {code:200,headers:{},setHeader(k,v){this.headers[k]=v;},status(n){this.code=n;return this;},json(body){this.body=body;}}; }
 const baseServices={accountConfigured:()=>true,emailSignInEnabled:()=>false,billingConfigured:()=>false,account:async()=>null,getBillingAccountStatus:async()=>({billingAccount:false,billingAccountUnavailable:false}),takeQuota:async()=>{},hasPro:async()=>false};
-function accountRoute(services={}) {return load('pages/api/account.ts',{'../../src/server/public-services':{...baseServices,...services},'./public-services':{...baseServices,...services},'../../src/server/public-security':security}).default;}
+function accountRoute(services={},mocks={}) {return load('pages/api/account.ts',{'../../src/server/public-services':{...baseServices,...services},'./public-services':{...baseServices,...services},'../../src/server/public-security':security,...mocks}).default;}
 test('wrong/missing/duplicate origin fails before account service',async()=>{
  let calls=0;const handler=accountRoute({account:async()=>{calls++;return 'attacker';}});
  for(const origin of ['https://evil.test',undefined,'https://launch.example.com.evil.test']) {const req=request({action:'status'},{origin});const res=response();await handler(req,res);assert.equal(res.code,403);}
@@ -78,7 +78,32 @@ test('CID validator checks structural version/hash/digest length',()=>{
  assert.equal(isValidCid('bafy'+ 'a'.repeat(200)),false);
 });
 
-test('checkout cannot charge while live tools are disabled',async()=>{
- const before=process.env.LIVE_LAUNCH_ENABLED;delete process.env.LIVE_LAUNCH_ENABLED;let calls=0;
- try{const res=response();await accountRoute({account:async()=>{calls++;return 'user';}})(request({action:'checkout'}),res);assert.equal(res.code,503);assert.equal(calls,0);}finally{if(before!==undefined)process.env.LIVE_LAUNCH_ENABLED=before;}
+async function withGateEnvironment(env, run) {
+ const before=Object.fromEntries(Object.keys(env).map(key=>[key,process.env[key]]));
+ try { for(const [key,value] of Object.entries(env)) { if(value===undefined)delete process.env[key];else process.env[key]=value; } await run(); }
+ finally { for(const [key,value] of Object.entries(before)) { if(value===undefined)delete process.env[key];else process.env[key]=value; } }
+}
+test('checkout fails before account and providers unless sales flag is exact true, regardless of launch',async()=>{
+ for(const sales of [undefined,'','false','TRUE','1',' true ']) for(const launch of ['false','true']) {
+  await withGateEnvironment({PRO_SALES_ENABLED:sales,LIVE_LAUNCH_ENABLED:launch,NODE_FINANCE_ENABLED:'true',NEXT_PUBLIC_PRO_SALES_ENABLED:'true'},async()=>{
+   const calls=[];const touched=name=>()=>{calls.push(name);throw Error('provider must not be called');};
+   const handler=accountRoute({account:touched('account'),takeQuota:touched('quota'),stripeClient:touched('stripe'),customerFor:touched('customer'),database:touched('database')});
+   const res=response();await handler(request({action:'checkout'}),res);
+   assert.equal(res.code,503);assert.equal(res.body.code,'BILLING_SETUP');assert.match(res.body.error,/currently unavailable/);assert.deepEqual(calls,[]);
+  });
+ }
+});
+test('exact sales flag permits the unchanged checkout route with PONS launch disabled',async()=>{
+ await withGateEnvironment({PRO_SALES_ENABLED:'true',LIVE_LAUNCH_ENABLED:'false',NODE_FINANCE_ENABLED:'false'},async()=>{
+  const calls=[];
+  const handler=accountRoute({account:async()=>{calls.push('account');return 'user';},takeQuota:async()=>{},stripeClient:()=>({}),customerFor:async(id,create)=>{assert.equal(create,true);return 'cus_test';},hasSubscription:async()=>false,database:()=>({})},{'../../src/server/public-checkout':{subscriptionCheckout:async()=>{calls.push('checkout');return 'https://checkout.stripe.com/test';},billingPortal:async()=>{throw Error('Unexpected portal');}}});
+  const res=response();await handler(request({action:'checkout'}),res);assert.equal(res.code,200);assert.equal(res.body.url,'https://checkout.stripe.com/test');assert.deepEqual(calls,['account','checkout']);
+ });
+});
+test('existing subscription portal remains reachable when sales and PONS launch are disabled',async()=>{
+ await withGateEnvironment({PRO_SALES_ENABLED:'false',LIVE_LAUNCH_ENABLED:'false'},async()=>{
+  const calls=[];
+  const handler=accountRoute({account:async()=>{calls.push('account');return 'user';},takeQuota:async()=>{},stripeClient:()=>({}),customerFor:async(id,create)=>{assert.equal(create,false);return 'cus_test';},hasSubscription:async()=>{throw Error('Portal must not inspect entitlement');}},{'../../src/server/public-checkout':{subscriptionCheckout:async()=>{throw Error('Unexpected checkout');},billingPortal:async()=>{calls.push('portal');return 'https://billing.stripe.com/test';}}});
+  const res=response();await handler(request({action:'portal'}),res);assert.equal(res.code,200);assert.equal(res.body.url,'https://billing.stripe.com/test');assert.deepEqual(calls,['account','portal']);
+ });
 });
