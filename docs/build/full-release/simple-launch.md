@@ -16,6 +16,7 @@ Trading calculations, approval flow, batch execution, action locks, slippage, ga
 - Targeted source tests: `verification/full-release/simple-launch/ui/targeted-tests.log`.
 - TypeScript: `verification/full-release/simple-launch/ui/typecheck.log`.
 - Upload browser test: `verification/full-release/simple-launch/ui/upload-session-browser.log` — PASS in Edge for account change, replacement, removal, and a newer invalid selection while the prior request is held.
+- Responsive browser test: `verification/full-release/simple-launch/ui/responsive-layout-browser.log` — PASS in Edge at 375, 768, 1024, and 1440px; launch panes collapse to one mobile column, desktop node notices follow the three-column trade row, controls remain at least 44px, and direct children do not clip.
 
 ## Risks
 
@@ -24,6 +25,6 @@ Trading calculations, approval flow, batch execution, action locks, slippage, ga
 | Late upload result crosses account sessions | Low | Captured session plus request generation check; abort and object-URL cleanup |
 | Disclosure hides a required recovery state | Low | Pending/unknown/approval status and recovery actions remain outside transaction Details |
 | Wallet state is lost during workflow reorder | Low | Original keyed ownership boundary and layout-effect invalidation retained; existing lifetime tests |
-| Responsive dense rows overflow | Medium | Compact desktop grid and existing mobile collapse; root compiled visual gate at required viewports |
+| Responsive dense rows overflow | Low | Actual CSS is checked in Edge at four required widths for column placement, control size, overflow, and child clipping |
 
 Key Principle: simplify the visible path while leaving account authority and signing-session fences intact.
