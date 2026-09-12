@@ -79,7 +79,11 @@ export const tradeAddress = (value: string): string => {
   if(typeof value!=='string' || !/^0x[\da-fA-F]{40}$/.test(value) || value.toLowerCase()===ZERO)throw new Error('Enter a valid nonzero token or node address.');
   return utils.getAddress(value);
 };
-export function tradeProvider(): providers.JsonRpcProvider {return new providers.JsonRpcProvider({url:TRADE_RPC,timeout:15000});}
+export function tradeProvider(): providers.JsonRpcProvider {
+  // This URL is fixed, unlike the connected browser wallet. Keep the explicit
+  // eth_chainId guards around each operation without re-detecting every read.
+  return new providers.StaticJsonRpcProvider({url:TRADE_RPC,timeout:15000},{chainId:TRADE_CHAIN_ID,name:'robinhood'});
+}
 export async function assertTradeChain(p: providers.JsonRpcProvider): Promise<void> {
   if(BigNumber.from(await p.send('eth_chainId',[])).toNumber()!==TRADE_CHAIN_ID)throw new Error('Trading RPC returned the wrong network.');
 }

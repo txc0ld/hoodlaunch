@@ -43,7 +43,7 @@ function harness(options={}){
  const context={Date:Clock,Error,console,setTimeout,clearTimeout,window:{localStorage:{getItem:k=>mem.get(k)||null,setItem:(k,v)=>{if(options.storageFail)throw Error();mem.set(k,v);}}},navigator:{locks:{request:async(name,opt,fn)=>fn(options.busy?null:{name})}}};
  function load(name){if(modules[name])return modules[name];const m={exports:{}};modules[name]=m.exports;const src=fs.readFileSync(path.join(__dirname,'../src/lib/'+name+'.ts'),'utf8');
   const js=ts.transpileModule(src,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText;
-  vm.runInNewContext('(function(require,module,exports){'+js+'\n})',context)(id=>id==='ethers'?{...ethers,Wallet:options.fixedRoot?FixtureWallet:ethers.Wallet,Contract,providers:{JsonRpcProvider:Provider}}:id.startsWith('./')?load(id.slice(2)):require(id),m,m.exports);return m.exports;
+  vm.runInNewContext('(function(require,module,exports){'+js+'\n})',context)(id=>id==='ethers'?{...ethers,Wallet:options.fixedRoot?FixtureWallet:ethers.Wallet,Contract,providers:{JsonRpcProvider:Provider,StaticJsonRpcProvider:Provider}}:id.startsWith('./')?load(id.slice(2)):require(id),m,m.exports);return m.exports;
  }
  const h={state,mem,calls,p:load('pons-trade'),t:load('node-trading'),vault:()=>load('node-vault'),assertActive:()=>{if(!state.active)throw Error('session forgotten');}};return h;
 }
