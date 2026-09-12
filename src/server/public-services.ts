@@ -33,7 +33,8 @@ export async function takeQuota(bucket: string, limit: number, seconds: number) 
     const { data, error, status } = await database.rpc('hood_take_quota', parameters);
     if (!error) {
       if (data === true) return;
-      fail(429, 'RATE_LIMIT', 'Limit reached. Please try again later.');
+      if (data === false) fail(429, 'RATE_LIMIT', 'Limit reached. Please try again later.');
+      fail(503, 'QUOTA_UNAVAILABLE', 'Service unavailable. Please try again later.');
     }
     if (attempt === 0 && retryableQuotaFailure(status, error)) {
       await new Promise(resolve => setTimeout(resolve, QUOTA_RETRY_DELAY_MS));

@@ -155,6 +155,15 @@ test('valid false denial returns 429 without retry', async () => {
   assert.deepEqual(h.waits, []);
 });
 
+test('unknown error-free quota payloads return 503 without retry', async () => {
+  for (const response of [jsonResponse(null), jsonResponse({ admitted: true }), new Response(null, { status: 204 })]) {
+    const h = harness([response, jsonResponse(true)]);
+    await assert.rejects(() => h.services.takeQuota('status:test', 180, 3600), expectPublicError('QUOTA_UNAVAILABLE', 503));
+    assert.equal(h.calls.length, 1);
+    assert.deepEqual(h.waits, []);
+  }
+});
+
 test('authentication, permission, and SQL validation errors fail closed without retry', async () => {
   for (const [status, code] of [[401, 'PGRST301'], [403, '42501'], [400, 'P0001']]) {
     const h = harness([jsonResponse({ code, message: 'rejected', details: null, hint: null }, status), jsonResponse(true)]);
