@@ -84,6 +84,7 @@ test('simple launch renders account, create, and wallets in workflow order witho
   assert.match(html, /href="#pro-account"[^>]*><span>01<\/span>Account</);
   assert.ok(html.indexOf('href="#pro-account"') < html.indexOf('href="#launch"'));
   assert.ok(html.indexOf('href="#launch"') < html.indexOf('href="#wallet-workspace"'));
+  assert.doesNotMatch(fs.readFileSync('src/components/TokenLab.tsx', 'utf8'), /#token-lab|Explore allocation and vesting simulations/);
 });
 
 test('upload affordance is visible for guests and enabled for signed-in Free and Pro accounts', () => {

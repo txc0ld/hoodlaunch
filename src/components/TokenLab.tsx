@@ -75,7 +75,7 @@ export function PonsLaunchPlan({ snapshot, creatorTaxBps, developerBuyEth, disab
     </div>
     <p className={styles.micro}>{snapshot?.customPair ? 'Custom pairs require a zero initial buy. Buy separately on PONS after launch.' : 'The initial buy uses ETH on Robinhood Chain. Leave enough for the launch fee and gas.'} {snapshot ? `Creator tax limit: ${snapshot.maxCreatorTaxPercent}%.` : ''}</p>
     <button className={styles.applyPlan} type="button" disabled={Boolean(disabledReason) || !snapshot} onClick={apply}>Apply to launch</button>
-    <p className={styles.micro}>Supply and curve fees come from PONS. This snapshot is not a quote; final review checks the current terms. Applying a plan does not send a transaction. <a href="#token-lab">Explore allocation and vesting simulations below.</a></p>
+    <p className={styles.micro}>Supply and curve fees come from PONS. This snapshot is not a quote; final review checks the current terms. Applying a plan does not send a transaction.</p>
     {disabledReason && <p className={styles.micro} role="status">{disabledReason}</p>}
     {notice && <p className={styles.message} role="status">{notice}</p>}
     {error && <p className={styles.error} role="alert">{error}</p>}
