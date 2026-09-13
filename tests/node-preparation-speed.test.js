@@ -51,6 +51,7 @@ test('public preparation avoids HD derivation while signing still derives and ch
     if (id === './node-trading') { duringImport(); return trading; }
     throw Error('Unexpected import');
   }, { Date: Clock });
+  v.setNodeAccountAccess('a'.repeat(64), true, true);
   const original = v.createNodeSession(3);
   const backup = await v.encryptNodeBackup(original, 'disposable speed test password');
   const session = await v.restoreNodeBackup(backup, 'disposable speed test password');

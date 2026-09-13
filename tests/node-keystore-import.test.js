@@ -16,6 +16,7 @@ function harness(options={}) {
  async function execute(session,review,active,sign){active();await options.beforeSign?.();active();const raw=await sign(tx);active();stats.returned++;return {raw};}
  const mocks={ethers:{...ethers,Wallet},'./pons-trade':{copyTradeAmount:x=>x},'./node-trading':{prepareTrade:async(s,i,address)=>{stats.prepared.push(address);return {nodeIndex:i,nodeAddress:address};},executeTrade:execute},'./relay-bridge':{prepareRelayBridge:async(s,i,address)=>{stats.prepared.push(address);return {nodeIndex:i,nodeAddress:address};},executeRelayBridge:execute}};
  const out={};new Function('exports','require','Date',source)(out,id=>{assert.ok(id in mocks,'Unexpected dependency');return mocks[id];},Clock);
+ out.setNodeAccountAccess('a'.repeat(64),true,true);
  return {v:out,stats,Wallet};
 }
 const main=harness();let hd,files,addresses,fixtureWallets;
@@ -88,9 +89,18 @@ test('HD and imported prepare/sign/export selectors bind every node address with
 });
 for(const kind of ['Trade','Bridge'])for(const stage of ['before','after','expiry'])test(`${kind} imported authority rejects ${stage} sign revocation before returning signed bytes`,async()=>{
  const options={now:1000};const h=harness(options);options.decrypt=async()=>new h.Wallet(fixtureWallets[0].privateKey);
- const s=await h.v.importNodeKeystores([files[0]],PASSWORD),review={nodeIndex:0,nodeAddress:s.addresses[0]};
+ const s=await h.v.importNodeKeystores([files[0]],PASSWORD);
+ const review=kind==='Trade'?await h.v.prepareNodeTrade(s,0,'0x1111111111111111111111111111111111111111','buy',5):await h.v.prepareNodeBridge(s,0,'1');
  if(stage==='before')options.beforeSign=()=>h.v.forgetNodeSession(s);
  else options.afterSign=()=>{if(stage==='expiry')options.now+=h.v.NODE_IDLE_MS;else h.v.forgetNodeSession(s);};
  await assert.rejects(h.v['executeNode'+kind](s,review),/no longer available/);
  assert.equal(h.stats.signs,stage==='before'?0:1);assert.equal(h.stats.returned,0);assert.equal(h.v.isVerifiedNodeSession(s),false);
+});
+
+
+test('an import started by one account cannot register its decrypted wallets for a new owner',async()=>{
+ let release,entered;const gate=new Promise(r=>release=r),started=new Promise(r=>entered=r);
+ const h=harness({decrypt:async()=>{entered();await gate;return fixtureWallets[0];}});
+ const pending=h.v.importNodeKeystores([files[0]],PASSWORD);await started;
+ h.v.setNodeAccountAccess('b'.repeat(64),true,true);release();await assert.rejects(pending,{message:SAFE});
 });

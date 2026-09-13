@@ -19,9 +19,34 @@ export interface NodeSession {
 // JavaScript cannot guarantee that garbage-collected secret strings are erased.
 export const NODE_IDLE_MS = 15 * 60 * 1000;
 type NodeMaterial = { kind: 'hd'; root: Wallet } | { kind: 'imported'; wallets: readonly Wallet[] };
-type NodeState = NodeMaterial & { expiresAt: number };
+type NodeState = NodeMaterial & { expiresAt: number; ownerEpoch: number; accountIdentity: string | null };
 const sessions = new WeakMap<NodeSession, NodeState>();
 let kdfInProgress = false;
+let account = { identity: null as string | null, pro: false, ready: false, ownerEpoch: 0, actionEpoch: 0 };
+const financialReviews = new WeakMap<object, number>();
+
+// Readiness is deliberately independent of backup verification and idle expiry.
+export function setNodeAccountAccess(identity: string | null, pro: boolean, ready: boolean): void {
+  if ((identity !== null && !/^[a-f0-9]{64}$/.test(identity)) || typeof pro !== 'boolean' || typeof ready !== 'boolean') throw new Error('Invalid account verification state.');
+  const ownerChanged = identity !== account.identity || pro !== account.pro;
+  const suspended = account.ready && !ready;
+  account = { identity, pro, ready: Boolean(identity) && ready,
+    ownerEpoch: account.ownerEpoch + (ownerChanged ? 1 : 0),
+    actionEpoch: account.actionEpoch + (ownerChanged || suspended ? 1 : 0) };
+}
+
+export function getNodeFinancialEpoch(session: NodeSession): number {
+  const state = requireSession(session);
+  if (!session.backupVerified || !account.ready || !account.pro || !account.identity || state.accountIdentity !== account.identity) {
+    throw new Error('Account verification is unavailable. Node financial actions are paused. Refresh account access before a new action.');
+  }
+  return account.actionEpoch;
+}
+
+export function assertNodeFinancialEpoch(session: NodeSession, epoch: number): void {
+  if (getNodeFinancialEpoch(session) !== epoch) throw new Error('Account verification changed. Start a new node action.');
+}
+
 
 function validatePassword(password: string): void {
   if (typeof password !== 'string' || password.length < 12 || password.length > 128) {
@@ -37,8 +62,8 @@ function validateCount(count: number): void {
 
 function requireSession(session: NodeSession): NodeState {
   const state = sessions.get(session);
-  if (state && Date.now() >= state.expiresAt) sessions.delete(session);
-  if (!state || Date.now() >= state.expiresAt) throw new Error('This node session is no longer available. Restore its backup.');
+  if (state && (Date.now() >= state.expiresAt || state.ownerEpoch !== account.ownerEpoch)) sessions.delete(session);
+  if (!state || Date.now() >= state.expiresAt || state.ownerEpoch !== account.ownerEpoch) throw new Error('This node session is no longer available. Restore its backup.');
   return state;
 }
 
@@ -69,7 +94,7 @@ function register(material: NodeMaterial, addresses: readonly string[], backupVe
     addresses: Object.freeze([...addresses]),
     backupVerified,
   });
-  sessions.set(session, { ...material, expiresAt: Date.now() + NODE_IDLE_MS });
+  sessions.set(session, { ...material, expiresAt: Date.now() + NODE_IDLE_MS, ownerEpoch: account.ownerEpoch, accountIdentity: account.identity });
   return session;
 }
 
@@ -178,6 +203,7 @@ export async function restoreNodeBackup(
   serialized: string, password: string, onProgress?: (progress: number) => void,
 ): Promise<NodeSession> {
   validatePassword(password);
+  const ownerEpoch = account.ownerEpoch;
   return withKdf(async () => {
     try {
       if (typeof serialized !== 'string' || serialized.length > MAX_BACKUP_BYTES ||
@@ -197,6 +223,7 @@ export async function restoreNodeBackup(
       const addresses = deriveAddresses(root, backup.count);
       if (!addresses.every((address, index) => address === (backup.addresses as string[])[index]) ||
           manifestMac(root, addresses) !== backup.manifestMac) throw new Error('Backup manifest mismatch.');
+      if (ownerEpoch !== account.ownerEpoch) throw new Error('Account owner changed during recovery.');
       return register({ kind: 'hd', root }, addresses, true);
     } catch {
       // Never return ethers errors that may embed secret values or input data.
@@ -244,6 +271,7 @@ export async function importNodeKeystores(
   serialized: readonly string[], password: string, onProgress?: (progress: number) => void,
 ): Promise<NodeSession> {
   validatePassword(password);
+  const ownerEpoch = account.ownerEpoch;
   const safeError = () => new Error('Unable to import encrypted keystores. Check the files and shared password.');
   let inputs: string[];
   let declared: string[];
@@ -274,6 +302,7 @@ export async function importNodeKeystores(
         wallets.push(wallet);
       }
       // No session exists until the entire selected set authenticates.
+      if (ownerEpoch !== account.ownerEpoch) throw safeError();
       return register({ kind: 'imported', wallets: Object.freeze([...wallets]) }, declared, true);
     } catch { throw safeError(); }
     finally { wallets.length = 0; }
@@ -315,34 +344,33 @@ export function isVerifiedNodeSession(session: NodeSession): boolean {
 
 function requireBridgeNode(session: NodeSession, index: number): NodeState {
   const state = requireSession(session);
+  getNodeFinancialEpoch(session);
   if (!session.backupVerified || !Number.isInteger(index) || index < 0 || index >= session.addresses.length) {
     throw new Error('Restore and verify the backup before bridging a node.');
   }
   return state;
 }
 
+function financialGuard(session: NodeSession, index: number, epoch: number, assertCurrent: () => void = () => {}): () => void {
+  return () => { assertNodeFinancialEpoch(session, epoch); requireBridgeNode(session, index); assertCurrent(); };
+}
+
 export async function prepareNodeBridge(session: NodeSession, index: number, amountEth: string): Promise<NodeBridgeReview> {
-  requireBridgeNode(session, index);
-  const { prepareRelayBridge } = await import('./relay-bridge');
-  requireBridgeNode(session, index);
-  return prepareRelayBridge(session, index, walletAt(session, index).address, amountEth, () => { requireBridgeNode(session, index); });
+  const epoch = getNodeFinancialEpoch(session), current = financialGuard(session, index, epoch); current();
+  const { prepareRelayBridge } = await import('./relay-bridge'); current();
+  const review = await prepareRelayBridge(session, index, walletAt(session, index).address, amountEth, current);
+  current(); financialReviews.set(review, epoch); return review;
 }
 
 export async function executeNodeBridge(session: NodeSession, review: NodeBridgeReview, assertCurrent: () => void = () => {}): Promise<NodeBridgeOperation> {
-  assertCurrent();
-  requireBridgeNode(session, review.nodeIndex);
+  const epoch = getNodeFinancialEpoch(session), current = financialGuard(session, review.nodeIndex, epoch, assertCurrent); current();
   if (session.addresses[review.nodeIndex] !== review.nodeAddress) throw new Error('This bridge review belongs to another node.');
-  const { executeRelayBridge } = await import('./relay-bridge');
-  requireBridgeNode(session, review.nodeIndex);
-  return executeRelayBridge(session, review, () => { requireBridgeNode(session, review.nodeIndex); assertCurrent(); }, async (transaction) => {
-    assertCurrent();
-    requireBridgeNode(session, review.nodeIndex);
-    const wallet = walletAt(session, review.nodeIndex);
-    if (wallet.address !== review.nodeAddress) throw new Error('Node address mismatch.');
-    const signed = await wallet.signTransaction(transaction);
-    assertCurrent();
-    requireBridgeNode(session, review.nodeIndex);
-    return signed;
+  if (financialReviews.get(review) !== epoch) throw new Error('This financial review is invalid or account verification changed. Start a new action.');
+  const { executeRelayBridge } = await import('./relay-bridge'); current();
+  return executeRelayBridge(session, review, current, async transaction => {
+    current(); const wallet = walletAt(session, review.nodeIndex);
+    if (wallet.address !== session.addresses[review.nodeIndex]) throw new Error('Node address mismatch.');
+    const signed = await wallet.signTransaction(transaction); current(); return signed;
   });
 }
 
@@ -350,29 +378,24 @@ export async function prepareNodeTrade(
   session: NodeSession, index: number, token: string,
   side: import('./pons-trade').NodeTradeSide, amount: import('./pons-trade').NodeTradeAmount,
 ): Promise<import('./node-trading').NodeTradeReview> {
-  requireBridgeNode(session, index);
+  const epoch = getNodeFinancialEpoch(session), current = financialGuard(session, index, epoch); current();
   const copiedAmount = copyTradeAmount(amount);
-  const { prepareTrade } = await import('./node-trading');
-  requireBridgeNode(session, index);
-  return prepareTrade(session, index, session.addresses[index], token, side, copiedAmount, () => { requireBridgeNode(session, index); });
+  const { prepareTrade } = await import('./node-trading'); current();
+  const review = await prepareTrade(session, index, session.addresses[index], token, side, copiedAmount, current);
+  current(); financialReviews.set(review, epoch); return review;
 }
 
 export async function executeNodeTrade(
   session: NodeSession, review: import('./node-trading').NodeTradeReview,
   assertCurrent: () => void = () => {},
 ): Promise<import('./node-trading').NodeTradeOperation> {
-  const assertActive = () => { requireBridgeNode(session, review.nodeIndex); assertCurrent(); };
-  assertActive();
+  const epoch = getNodeFinancialEpoch(session), current = financialGuard(session, review.nodeIndex, epoch, assertCurrent); current();
   if (session.addresses[review.nodeIndex] !== review.nodeAddress) throw new Error('This trade review belongs to another node.');
-  const { executeTrade } = await import('./node-trading');
-  assertActive();
-  return executeTrade(session, review, assertActive, async (transaction) => {
-    assertActive();
-    requireBridgeNode(session, review.nodeIndex);
-    const wallet = walletAt(session, review.nodeIndex);
-    if (wallet.address !== review.nodeAddress) throw new Error('Node address mismatch.');
-    const signed = await wallet.signTransaction(transaction);
-    assertActive();
-    return signed;
+  if (financialReviews.get(review) !== epoch) throw new Error('This financial review is invalid or account verification changed. Start a new action.');
+  const { executeTrade } = await import('./node-trading'); current();
+  return executeTrade(session, review, current, async transaction => {
+    current(); const wallet = walletAt(session, review.nodeIndex);
+    if (wallet.address !== session.addresses[review.nodeIndex]) throw new Error('Node address mismatch.');
+    const signed = await wallet.signTransaction(transaction); current(); return signed;
   });
 }

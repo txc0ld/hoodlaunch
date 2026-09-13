@@ -47,9 +47,10 @@ function statusLabel(status: NodeBridgeOperation["status"]) {
 export interface NodeBridgeProps {
   session: NodeSession;
   nodeIndex: number;
+  accountReadiness?: boolean;
 }
 
-export default function NodeBridge({ session, nodeIndex }: NodeBridgeProps) {
+export default function NodeBridge({ session, nodeIndex, accountReadiness = false }: NodeBridgeProps) {
   const address = session.addresses[nodeIndex] || "";
   const [amountEth, setAmountEth] = useState("0.005");
   const [review, setReview] = useState<NodeBridgeReview | null>(null);
@@ -100,6 +101,14 @@ export default function NodeBridge({ session, nodeIndex }: NodeBridgeProps) {
     return () => window.clearInterval(timer);
   }, [review]);
 
+  useEffect(() => {
+    if (accountReadiness) return;
+    generationRef.current += 1;
+    actionRef.current = "idle"; setAction("idle");
+    consumedReviewRef.current = null; setReview(null); setConfirmed(false);
+    readRecoveryRecord();
+  }, [accountReadiness]);
+
   const expired = Boolean(review && now >= review.expiresAt);
   const operationBlocksNewBridge = Boolean(operation && !(["complete", "failed"].includes(operation.status)));
   const amountValid = /^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/.test(amountEth) && (() => {
@@ -116,7 +125,7 @@ export default function NodeBridge({ session, nodeIndex }: NodeBridgeProps) {
   }
 
   async function handlePrepare() {
-    if (!address || !amountValid || operationBlocksNewBridge || storageBlocked || actionRef.current !== "idle") return;
+    if (!accountReadiness || !address || !amountValid || operationBlocksNewBridge || storageBlocked || actionRef.current !== "idle") return;
     const generation = ++generationRef.current;
     const expectedSession = session;
     actionRef.current = "preparing";
@@ -144,7 +153,7 @@ export default function NodeBridge({ session, nodeIndex }: NodeBridgeProps) {
   }
 
   async function handleExecute() {
-    if (!review || expired || !confirmed || operationBlocksNewBridge || storageBlocked || actionRef.current !== "idle" || consumedReviewRef.current === review.requestId) return;
+    if (!accountReadiness || !review || expired || !confirmed || operationBlocksNewBridge || storageBlocked || actionRef.current !== "idle" || consumedReviewRef.current === review.requestId) return;
     const generation = ++generationRef.current;
     const submittedReview = review;
     consumedReviewRef.current = submittedReview.requestId;
@@ -194,9 +203,10 @@ export default function NodeBridge({ session, nodeIndex }: NodeBridgeProps) {
 
   return (
     <div className={styles.bridge} aria-label={`Node ${nodeIndex + 1} Relay bridge`}>
+      {!accountReadiness && <p role="status">Account verification is unavailable. New bridge actions are paused; recorded transaction status can still be refreshed.</p>}
       <div className={styles.controls}>
-        <label><span>ETH to bridge</span><input aria-label={`Node ${nodeIndex + 1} bridge amount`} value={amountEth} onChange={(event) => updateAmount(event.target.value)} inputMode="decimal" maxLength={80} aria-invalid={!amountValid} disabled={action !== "idle" || operationBlocksNewBridge || storageBlocked} /></label>
-        <button className={styles.bridgeButton} type="button" onClick={handlePrepare} disabled={!amountValid || action !== "idle" || operationBlocksNewBridge || storageBlocked}>{action === "preparing" ? "Getting Relay quote…" : "Bridge to Robinhood Chain"}</button>
+        <label><span>ETH to bridge</span><input aria-label={`Node ${nodeIndex + 1} bridge amount`} value={amountEth} onChange={(event) => updateAmount(event.target.value)} inputMode="decimal" maxLength={80} aria-invalid={!amountValid} disabled={!accountReadiness || action !== "idle" || operationBlocksNewBridge || storageBlocked} /></label>
+        <button className={styles.bridgeButton} type="button" onClick={handlePrepare} disabled={!accountReadiness || !amountValid || action !== "idle" || operationBlocksNewBridge || storageBlocked}>{action === "preparing" ? "Getting Relay quote…" : "Bridge to Robinhood Chain"}</button>
       </div>
       {!amountValid && <p className={styles.fieldError} role="alert">Enter a positive ETH amount with no more than 18 decimal places.</p>}
       {error && <div className={styles.alert} role="alert"><span>{error}</span><button type="button" onClick={() => setError("")}>Dismiss</button></div>}
@@ -222,9 +232,9 @@ export default function NodeBridge({ session, nodeIndex }: NodeBridgeProps) {
           <div><dt>Recipient and refund</dt><dd>Same node address</dd></div>
         </dl>
         <p className={styles.disclaimer}>This signs one native ETH deposit from this node on Ethereum. Relay’s minimum output applies only to a successful bridge; the protocol refund minimum is zero, so a refund amount is not guaranteed. Relay status alone does not prove the ETH is ready for PONS.</p>
-        <label className={styles.confirm}><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} disabled={action !== "idle" || expired} /><span>I checked the full address, both chain IDs, bridge amount, minimum output, Relay fee, maximum Ethereum gas, and accept Relay fill and refund risk.</span></label>
-        <button className={styles.confirmButton} type="button" onClick={handleExecute} disabled={!confirmed || expired || action !== "idle" || consumedReviewRef.current === review.requestId}>{action === "executing" ? "Signing and broadcasting…" : "Confirm Relay bridge"}</button>
-        {expired && <button className={styles.secondaryButton} type="button" onClick={handlePrepare} disabled={action !== "idle"}>Get a fresh quote</button>}
+        <label className={styles.confirm}><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} disabled={!accountReadiness || action !== "idle" || expired} /><span>I checked the full address, both chain IDs, bridge amount, minimum output, Relay fee, maximum Ethereum gas, and accept Relay fill and refund risk.</span></label>
+        <button className={styles.confirmButton} type="button" onClick={handleExecute} disabled={!accountReadiness || !confirmed || expired || action !== "idle" || consumedReviewRef.current === review.requestId}>{action === "executing" ? "Signing and broadcasting…" : "Confirm Relay bridge"}</button>
+        {expired && <button className={styles.secondaryButton} type="button" onClick={handlePrepare} disabled={!accountReadiness || action !== "idle"}>Get a fresh quote</button>}
       </div>}
 
       {operation && <div className={`${styles.operation} ${operation.status === "complete" ? styles.complete : operation.status === "unknown" || operation.status === "refunded" ? styles.problem : ""}`} role="status">

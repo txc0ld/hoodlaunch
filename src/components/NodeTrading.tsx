@@ -21,6 +21,7 @@ const STATUS_REFRESH_DEADLINE_MS = 20_000;
 const HOLDINGS_REFRESH_RETRIES = 3;
 const STATUS_REFRESH_CONCURRENCY = 3;
 const statusReads = new Map<string, Promise<NodeTradeOperation>>();
+const snapshotReads = new Map<string, Promise<NodeTradingSnapshot>>();
 
 type Action = "idle" | "loading" | "preparing" | "executing" | "refreshing";
 type SubmissionOutcome = { label: string; error: string };
@@ -126,13 +127,31 @@ function statusRead(address: string, txHash: string) {
   return pending;
 }
 
+// UI deadlines do not cancel provider reads. Keep each underlying snapshot
+// counted until it settles, including across token changes and remounts.
+function snapshotRead(token: string, addresses: readonly string[]) {
+  const key = JSON.stringify([token.toLowerCase(), addresses.map(address => address.toLowerCase())]);
+  const existing = snapshotReads.get(key);
+  if (existing) return existing;
+  if (snapshotReads.size >= STATUS_REFRESH_CONCURRENCY) throw new Error("Three holdings reads are still in progress. Retry after they finish.");
+  const pending = getNodeTradingSnapshot(token, addresses).finally(() => {
+    if (snapshotReads.get(key) === pending) snapshotReads.delete(key);
+  });
+  snapshotReads.set(key, pending); return pending;
+}
+
 export interface NodeTradingProps {
   session: NodeSession | null;
+  accountReadiness?: boolean;
   launchedTokenAddress?: string;
   onNodeBalancesRefresh?: () => void;
 }
 
-export default function NodeTrading({ session, launchedTokenAddress = "", onNodeBalancesRefresh }: NodeTradingProps) {
+export default function NodeTrading({ accountReadiness = false, session, launchedTokenAddress = "", onNodeBalancesRefresh }: NodeTradingProps) {
+  const accountReadinessRef = useRef(accountReadiness);
+  const accountActionEpochRef = useRef(0);
+  if (accountReadinessRef.current && !accountReadiness) accountActionEpochRef.current += 1;
+  accountReadinessRef.current = accountReadiness;
   const [tokenInput, setTokenInput] = useState(launchedTokenAddress);
   const [customAmounts, setCustomAmounts] = useState<Record<string, string>>({});
   const [customErrors, setCustomErrors] = useState<Record<string, string>>({});
@@ -273,7 +292,7 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
         refreshHoldingsStartedRef.current = true;
         holdingsPromise = (async () => {
           try {
-            const nextSnapshot = await beforeDeadline(() => getNodeTradingSnapshot(selectedToken, currentSession.addresses), deadline, "Holdings refresh timed out.");
+            const nextSnapshot = await beforeDeadline(() => snapshotRead(selectedToken, currentSession.addresses), deadline, "Holdings refresh timed out.");
             if (!selectionCurrent() || nextSnapshot.tokenAddress.toLowerCase() !== selectedToken.toLowerCase()) return;
             setSnapshot(nextSnapshot);
             tokenHoldingsRefreshed = true;
@@ -349,7 +368,7 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
     setReview(null);
     setBatch(null);
     try {
-      const next = await getNodeTradingSnapshot(token, current.addresses);
+      const next = await beforeDeadline(() => snapshotRead(token, current.addresses), Date.now() + STATUS_REFRESH_DEADLINE_MS, "Holdings refresh timed out.");
       if (generation !== generationRef.current || current !== session) return;
       setTokenInput(next.tokenAddress);
       setSnapshot(next);
@@ -476,7 +495,7 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
   }
 
   async function handlePrepare(index: number, side: NodeTradeSide, amount: NodeTradeAmount) {
-    if (!session || !snapshot?.tradingAvailable || actionRef.current !== "idle") return;
+    if (!accountReadiness || !session || !snapshot?.tradingAvailable || actionRef.current !== "idle") return;
     const address = session.addresses[index];
     const existing = operations[address.toLowerCase()];
     if (blockedStorage[address.toLowerCase()] || (existing && (existing.status === "pending" || existing.status === "unknown"))) return;
@@ -491,10 +510,12 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
     }
     const generation = ++generationRef.current;
     const currentSession = session;
+    const accountEpoch = accountActionEpochRef.current;
     const currentToken = snapshot.tokenAddress;
     const currentDecimals = snapshot.decimals;
     const currentLaunch = launchedTokenAddress;
     const assertCurrent = () => {
+      if (!accountReadinessRef.current || accountActionEpochRef.current !== accountEpoch) throw new Error("Account verification changed. Start a new action after verification resumes.");
       if (generation !== generationRef.current || selectionRef.current.session !== currentSession || selectionRef.current.launchedTokenAddress !== currentLaunch || (typeof selection !== "number" && customAmountsRef.current[customKey] !== selection.amount)) {
         throw new Error("The selected node session, token or amount changed. The action was cancelled.");
       }
@@ -547,9 +568,10 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
   }
 
   async function handlePrepareBatch(side: NodeTradeSide) {
-    if (!session || !snapshot?.tradingAvailable || actionRef.current !== "idle") return;
+    if (!accountReadiness || !session || !snapshot?.tradingAvailable || actionRef.current !== "idle") return;
     const generation = ++generationRef.current;
     const currentSession = session;
+    const accountEpoch = accountActionEpochRef.current;
     const currentToken = snapshot.tokenAddress;
     const currentLaunch = launchedTokenAddress;
     actionRef.current = "preparing";
@@ -565,6 +587,7 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
     setRefreshNotice("");
     stopBatchRef.current = false;
     const assertCurrent = () => {
+      if (!accountReadinessRef.current || accountActionEpochRef.current !== accountEpoch) throw new Error("Account verification changed. Start a new action after verification resumes.");
       if (generation !== generationRef.current || stopBatchRef.current || selectionRef.current.session !== currentSession || selectionRef.current.launchedTokenAddress !== currentLaunch) {
         throw new Error("Stopped before submission. Already submitted transactions continue.");
       }
@@ -679,6 +702,7 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
   return (
     <section id="node-trading" className={styles.trading} aria-labelledby="node-trading-title" tabIndex={-1}>
       <header className={styles.header}><div><span className={styles.eyebrow}>Node trading</span><h2 id="node-trading-title">Trade the launched token</h2><p>Buy and Sell buttons submit immediately using that node’s key after checking the quote and gas. Percentages use its balances and retain ETH for gas.</p></div><span className={styles.chainBadge}>Robinhood · 4663</span></header>
+      {!accountReadiness && <p role="status">Account verification is unavailable. New trades are paused. Your wallets, transaction records, and balance refresh remain available.</p>}
       <div className={styles.body}>
         {!session ? <p className={styles.locked}>Generate wallets and verify their encrypted backup to enable node trading.</p> : <>
           <div className={styles.tokenPicker}><label><span>PONS token address</span><input value={tokenInput} onChange={(event) => updateToken(event.target.value)} placeholder="0x…" autoComplete="off" aria-label="PONS token address" disabled={action !== "idle"} /></label><button className={styles.primaryButton} type="button" onClick={handleLoad} disabled={!tokenInput.trim() || action !== "idle"}>{action === "loading" ? "Verifying token…" : snapshot ? "Refresh holdings" : "Verify token and load holdings"}</button></div>
@@ -697,8 +721,8 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
             <p className={styles.phase}>{snapshot.phaseMessage}</p>
             <div className={styles.bulkToolbar} aria-label="Trade with all nodes">
               <div><strong>All nodes</strong><p>Submit each eligible node’s maximum amount immediately, with ETH retained for gas.</p></div>
-              <button className={styles.primaryButton} type="button" onClick={() => handlePrepareBatch("buy")} disabled={!snapshot.tradingAvailable || !rows.length || action !== "idle"}>Buy Max All Nodes</button>
-              <button className={styles.secondaryButton} type="button" onClick={() => handlePrepareBatch("sell")} disabled={!snapshot.tradingAvailable || !rows.length || action !== "idle"}>Sell Max All Nodes</button>
+              <button className={styles.primaryButton} type="button" onClick={() => handlePrepareBatch("buy")} disabled={!accountReadiness || !snapshot.tradingAvailable || !rows.length || action !== "idle"}>Buy Max All Nodes</button>
+              <button className={styles.secondaryButton} type="button" onClick={() => handlePrepareBatch("sell")} disabled={!accountReadiness || !snapshot.tradingAvailable || !rows.length || action !== "idle"}>Sell Max All Nodes</button>
             </div>
             {action === "preparing" && <p className={styles.phase} role="status">Checking fresh amounts and gas before immediate submission…</p>}
             {action === "executing" && <p className={styles.phase} role="status">Signing and submitting the selected actions…</p>}
@@ -714,9 +738,9 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
                   {storageError && <div className={styles.alert} role="alert"><span>{storageError}</span><button type="button" onClick={() => retryStorage(address)}>Retry status check</button></div>}
                   {operation && <div className={styles.operation}><strong>{operationLabel(operation)}</strong>{operation.status !== "confirmed" && <p>{operation.message}</p>}{(operation.status === "pending" || operation.status === "unknown") && <button className={styles.secondaryButton} type="button" onClick={() => handleRefreshOperation(address)} disabled={action !== "idle"}>{action === "refreshing" ? "Checking status…" : "Refresh transaction status"}</button>}<details className={styles.operationDetails}><summary>Transaction details</summary><p>{operation.message}</p><dl><div><dt>Recorded token</dt><dd>{operation.tokenAddress}</dd></div><div><dt>Action</dt><dd>{operation.action}</dd></div><div><dt>Transaction</dt><dd>{operation.txHash}</dd></div></dl></details></div>}
                   <div className={styles.tradeGroups}>
-                    {(["buy", "sell"] as const).map((side) => <div className={styles.tradeGroup} key={side}><span>{side === "buy" ? `Buy ${snapshot.symbol} · % of spendable ETH after gas` : `Sell ${snapshot.symbol} · % of holdings`}</span><div className={styles.tradeButtons}>{PERCENTS.map((percent) => <button type="button" key={percent} onClick={() => handlePrepare(index, side, percent)} disabled={!snapshot.tradingAvailable || !balance || blocked || action !== "idle"} aria-label={`${side === "buy" ? "Buy" : "Sell"} ${percent === 100 ? "Max" : `${percent}%`} with node ${index + 1}`}>{percent === 100 ? `${side === "buy" ? "Buy" : "Sell"} Max` : `${percent}%`}</button>)}</div><div className={styles.customTrade}>
-                      <label><span>{side === "buy" ? "Custom buy · ETH" : `Custom sell · ${snapshot.symbol}`}</span><input type="text" inputMode="decimal" autoComplete="off" maxLength={116} value={customAmounts[`${address.toLowerCase()}:${side}`] || ""} onChange={(event) => updateCustomAmount(`${address.toLowerCase()}:${side}`, event.target.value)} aria-label={side === "buy" ? `Custom buy ETH for node ${index + 1}` : `Custom sell tokens for node ${index + 1}`} disabled={!snapshot.tradingAvailable || !balance || blocked || action !== "idle"} placeholder={side === "buy" ? "0.001" : "Token amount"} /></label>
-                      <button className={styles.secondaryButton} type="button" onClick={() => handlePrepare(index, side, { amount: customAmountsRef.current[`${address.toLowerCase()}:${side}`] || "" })} disabled={!customAmounts[`${address.toLowerCase()}:${side}`] || !snapshot.tradingAvailable || !balance || blocked || action !== "idle"} aria-label={`${side === "buy" ? "Buy" : "Sell"} custom amount with node ${index + 1}`}>{side === "buy" ? "Buy amount" : "Sell amount"}</button>
+                    {(["buy", "sell"] as const).map((side) => <div className={styles.tradeGroup} key={side}><span>{side === "buy" ? `Buy ${snapshot.symbol} · % of spendable ETH after gas` : `Sell ${snapshot.symbol} · % of holdings`}</span><div className={styles.tradeButtons}>{PERCENTS.map((percent) => <button type="button" key={percent} onClick={() => handlePrepare(index, side, percent)} disabled={!accountReadiness || !snapshot.tradingAvailable || !balance || blocked || action !== "idle"} aria-label={`${side === "buy" ? "Buy" : "Sell"} ${percent === 100 ? "Max" : `${percent}%`} with node ${index + 1}`}>{percent === 100 ? `${side === "buy" ? "Buy" : "Sell"} Max` : `${percent}%`}</button>)}</div><div className={styles.customTrade}>
+                      <label><span>{side === "buy" ? "Custom buy · ETH" : `Custom sell · ${snapshot.symbol}`}</span><input type="text" inputMode="decimal" autoComplete="off" maxLength={116} value={customAmounts[`${address.toLowerCase()}:${side}`] || ""} onChange={(event) => updateCustomAmount(`${address.toLowerCase()}:${side}`, event.target.value)} aria-label={side === "buy" ? `Custom buy ETH for node ${index + 1}` : `Custom sell tokens for node ${index + 1}`} disabled={!accountReadiness || !snapshot.tradingAvailable || !balance || blocked || action !== "idle"} placeholder={side === "buy" ? "0.001" : "Token amount"} /></label>
+                      <button className={styles.secondaryButton} type="button" onClick={() => handlePrepare(index, side, { amount: customAmountsRef.current[`${address.toLowerCase()}:${side}`] || "" })} disabled={!accountReadiness || !customAmounts[`${address.toLowerCase()}:${side}`] || !snapshot.tradingAvailable || !balance || blocked || action !== "idle"} aria-label={`${side === "buy" ? "Buy" : "Sell"} custom amount with node ${index + 1}`}>{side === "buy" ? "Buy amount" : "Sell amount"}</button>
                     </div>{customErrors[`${address.toLowerCase()}:${side}`] && <p className={styles.warning} role="alert">{customErrors[`${address.toLowerCase()}:${side}`]}</p>}</div>)}
                   </div>
                 </article>;

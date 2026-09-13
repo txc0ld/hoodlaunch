@@ -50,7 +50,7 @@ window.useActualManager=()=>{
  });
  modules['../lib/node-generation']={GenerationError:class extends Error{},nodeGenerationRequest:async identity=>({sessionIdentity:identity,enabled:true,available:true,maxCount:50,nextEligibleAt:null})};
  modules['../lib/node-balances']={getNodeBalances:async addresses=>{__test.balanceReads++;return {chainId:4663,blockNumber:100,checkedAt:Date.now(),balances:addresses.map(address=>({address,balanceWei:'10000000000000000'}))};}};
- modules['./NodeBridge']={default:()=>{__test.bridgeMounts++;return jsx('div',{'data-bridge':true});}};
+ modules['./NodeBridge']={default:props=>{__test.bridgeMounts++;return jsx('div',{'data-bridge':true,'data-account-ready':props.accountReadiness});}};
  modules['./ExchangeFunding']={default:()=>{__test.fundingMounts++;return jsx('div',{'data-funding':true});}};
  const managerModule={exports:{}};
  new Function('require','module','exports',${JSON.stringify(managerSource)})(id=>modules[id]||(id.endsWith('.css')?{default:new Proxy({},{get:(_,k)=>String(k)})}:{default:noop}),managerModule,managerModule.exports);
@@ -64,14 +64,14 @@ window.queueSigning=()=>{const session=currentSession;window.resumeSigning=()=>{
 `;
 const html = '<!doctype html><div id="root"></div><script>' + ethers.replace(/<\/script/gi, '<\\/script') + '</script><script>' + setup.replace(/<\/script/gi, '<\\/script') + '</script>';
 (async()=>{
- const browser=await chromium.launch({headless:true,...(process.platform==='win32'?{channel:'msedge'}:{})});
+ const browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{}),...(process.platform==='win32'?{channel:'msedge'}:{})});
  try {
   const context=await browser.newContext();
   await context.route('**/*',route=>route.request().isNavigationRequest()?route.fulfill({status:200,contentType:'text/html',body:html}):route.abort());
   const page=await context.newPage(), errors=[];
   page.on('pageerror',error=>errors.push(error.message));
   await page.goto('http://localhost:41895/');
-  const base={sessionIdentity:'a'.repeat(64),proEnabled:true,generationEnabled:true,nodeTradingEnabled:true,launchEnabled:false,financeEnabled:true};
+  const base={accountReadiness:true,sessionIdentity:'a'.repeat(64),proEnabled:true,generationEnabled:true,nodeTradingEnabled:true,launchEnabled:false,financeEnabled:true};
   for(const [name,change] of Object.entries({account:{sessionIdentity:'b'.repeat(64)},logout:{sessionIdentity:null},pro:{proEnabled:false},generation:{generationEnabled:false},trading:{nodeTradingEnabled:false},finance:{financeEnabled:false}})){
    await page.evaluate(props=>renderWorkspace(props),base);
    await page.evaluate(id=>publishSession(id),name);
@@ -124,6 +124,14 @@ const html = '<!doctype html><div id="root"></div><script>' + ethers.replace(/<\
   await page.locator('[data-refresh-node-balances]').click();
   await page.waitForFunction(()=>__test.balanceReads===1);
   await page.getByText(/balance snapshot.*block 100/).waitFor();
+  const beforePauseForgets=await page.evaluate(()=>__test.forgets.length);
+  await page.evaluate(props=>renderWorkspace({...props,accountReadiness:false}),base);
+  assert.equal(await page.locator('[data-trading]').getAttribute('data-trading'),'restored-fixture');
+  assert.equal(await page.locator('[data-bridge]').getAttribute('data-account-ready'),'false');
+  assert.equal(await page.locator('[data-funding]').count(),0);
+  await page.locator('[data-refresh-node-balances]').click();await page.waitForFunction(()=>__test.balanceReads===2);
+  await page.evaluate(props=>renderWorkspace(props),base);
+  assert.equal(await page.locator('[data-funding]').count(),1);assert.equal(await page.evaluate(()=>__test.forgets.length),beforePauseForgets);
   await page.evaluate(props=>renderWorkspace({...props,launchEnabled:true,financeEnabled:false}),base);
   assert.equal(await page.locator('[data-bridge], [data-funding]').count(),0);
   assert.equal(await page.locator('[data-trading]').getAttribute('data-trading'),'none');

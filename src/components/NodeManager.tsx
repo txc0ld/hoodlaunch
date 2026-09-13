@@ -27,6 +27,7 @@ export interface NodeManagerProps {
   sessionIdentity: string;
   proEnabled?: boolean;
   financeEnabled?: boolean;
+  accountReadiness?: boolean;
   balanceRefreshVersion?: number;
   onSessionChange?: (session: NodeSession | null) => void;
 }
@@ -54,7 +55,7 @@ function shortAddress(address: string) {
   return `${address.slice(0, 8)}…${address.slice(-6)}`;
 }
 
-export default function NodeManager({ onSessionChange, sessionIdentity, proEnabled = false, financeEnabled = false, balanceRefreshVersion = 0 }: NodeManagerProps) {
+export default function NodeManager({ accountReadiness = false, onSessionChange, sessionIdentity, proEnabled = false, financeEnabled = false, balanceRefreshVersion = 0 }: NodeManagerProps) {
   const [open, setOpen] = useState(false);
   const [count, setCount] = useState(proEnabled ? 5 : 1);
   const [allowance, setAllowance] = useState<NodeAllowance | null>(null);
@@ -458,7 +459,7 @@ export default function NodeManager({ onSessionChange, sessionIdentity, proEnabl
 
       {session && <button className={styles.secondaryButton} type="button" onClick={lockWallets}>Lock wallets</button>}
       <div id="node-manager-panel" className={styles.panel} hidden={!open}>
-        {financeEnabled && verified && session && <ExchangeFunding addresses={session.addresses} />}
+        {financeEnabled && accountReadiness && verified && session && <ExchangeFunding addresses={session.addresses} />}
         <div className={styles.step}>
           <div className={styles.stepHeading}><span>1</span><div><h2>Create and verify wallets</h2><p>Keys stay in this tab, which remains a sensitive signing environment. Wallets lock after 15 minutes without activity. Download the encrypted backup, then restore it to prove you can recover the wallets.</p></div></div>
           {vaultError && <div className={styles.alert} role="alert"><span>{vaultError}</span><button type="button" onClick={() => setVaultError("")}>Dismiss</button></div>}
@@ -495,7 +496,7 @@ export default function NodeManager({ onSessionChange, sessionIdentity, proEnabl
         <div className={`${styles.step} ${!verified ? styles.locked : ""}`} aria-disabled={!verified}>
           <div className={styles.stepHeading}><span>2</span><div><h2>{financeEnabled ? "Fund and monitor wallets" : "Wallet addresses & recovery"}</h2><p>{financeEnabled ? "Send ETH using your wallet or exchange, then bridge to Robinhood Chain." : "Keep your encrypted backup offline. Funding and bridge tools are currently unavailable; multi-wallet trading has a separate section below."}</p></div></div>
           {!verified ? <p className={styles.lockMessage}>Verify the encrypted backup in step 1 to reveal funding destinations.</p> : session && <>
-            {session.addresses.map((address,index)=><div key={`${session.id}-${index}`}><strong>Node {index+1}</strong><code className={styles.fullAddress}>{address}</code>{financeEnabled && <NodeBridge session={session} nodeIndex={index} />}</div>)}
+            {session.addresses.map((address,index)=><div key={`${session.id}-${index}`}><strong>Node {index+1}</strong><code className={styles.fullAddress}>{address}</code>{financeEnabled && <NodeBridge accountReadiness={accountReadiness} session={session} nodeIndex={index} />}</div>)}
             {!financeEnabled && <><button className={styles.secondaryButton} onClick={copyAddresses} type="button">Copy addresses</button>{copyStatus && <p role="status">{copyStatus}</p>}</>}
             {financeEnabled && <>
             <div className={styles.chainHeading}><strong>Robinhood Chain funding target</strong><small>This is separate from the Ethereum withdrawal amount above. Check here only after each wallet has bridged to chain ID 4663.</small></div>

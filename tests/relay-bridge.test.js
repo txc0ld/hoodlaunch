@@ -111,7 +111,7 @@ test('missing deposit log, wrong origin, destination failure, insufficient incre
  const h=harness(options);await execute(h,await prepare(h));h.mutable.stage='confirmed';const op=await h.bridge.refreshNodeBridgeOperation(wallet.address);assert.notEqual(op.status,'complete');await assert.rejects(prepare(h));}
 });
 test('vault rejects generated-unverified, forged and forgotten sessions before bridge network work',async()=>{
- const h=harness(),v=h.vault(),session=v.createNodeSession(1);
+ const h=harness(),v=h.vault();v.setNodeAccountAccess('a'.repeat(64),true,true);const session=v.createNodeSession(1);
  await assert.rejects(v.prepareNodeBridge(session,0,'0.005'));await assert.rejects(v.prepareNodeBridge({...session,backupVerified:true},0,'0.005'));
  v.forgetNodeSession(session);await assert.rejects(v.prepareNodeBridge(session,0,'0.005'));assert.equal(h.calls.length,0);
 });
@@ -125,7 +125,7 @@ test('expiry during signing cannot broadcast or create a durable operation',asyn
 });
 
 test('restored vault signs only the selected reviewed node, with cross-session and forget rejection',async()=>{
- const h=harness({fixedRoot:true}),v=h.vault(),original=v.createNodeSession(2);
+ const h=harness({fixedRoot:true}),v=h.vault();v.setNodeAccountAccess('a'.repeat(64),true,true);const original=v.createNodeSession(2);
  const backup=await v.encryptNodeBackup(original,'disposable bridge test password');
  const restored=await v.restoreNodeBackup(backup,'disposable bridge test password');
  const other=await v.restoreNodeBackup(backup,'disposable bridge test password');
@@ -162,7 +162,7 @@ test('direct canonical reverted deposit is terminal failed and permits a fresh q
  const h=harness({sourceRevert:true});await execute(h,await prepare(h));h.mutable.stage='confirmed';const operation=await h.bridge.refreshNodeBridgeOperation(wallet.address);assert.equal(operation.status,'failed');assert.match(operation.message,/reverted/);await prepare(h);assert.equal(h.calls.filter(x=>x==='eth_sendRawTransaction').length,1);
 });
 test('vault bridge lifecycle callback revokes signing authority before broadcast',async()=>{
- const h=harness({fixedRoot:true}),v=h.vault();const created=v.createNodeSession(1);const backup=await v.encryptNodeBackup(created,'a secure testing password');const restored=await v.restoreNodeBackup(backup,'a secure testing password');const review=await v.prepareNodeBridge(restored,0,'0.005');
+ const h=harness({fixedRoot:true}),v=h.vault();v.setNodeAccountAccess('a'.repeat(64),true,true);const created=v.createNodeSession(1);const backup=await v.encryptNodeBackup(created,'a secure testing password');const restored=await v.restoreNodeBackup(backup,'a secure testing password');const review=await v.prepareNodeBridge(restored,0,'0.005');
  for(const stopAt of [1,4,6]){let checks=0;const current=stopAt===1?review:await v.prepareNodeBridge(restored,0,'0.005');await assert.rejects(v.executeNodeBridge(restored,current,()=>{if(++checks===stopAt)throw Error('view cancelled');}),/cancelled/);assert.equal(h.calls.filter(x=>x==='eth_sendRawTransaction').length,0);assert.equal(h.memory.size,0);}
  v.forgetNodeSession(created);v.forgetNodeSession(restored);
 });
@@ -172,4 +172,13 @@ test('source runtime is checked again at execution, before signer callback',asyn
  test('destination completion requires canonical receipt, mined transaction, event identity and final block recheck',async()=>{
  for(const options of [{missingDestinationHash:true},{orphanDestination:true},{insufficientHead:true},{missingDestinationTx:true},{wrongDestinationTxHash:true},{unminedDestinationTx:true},{orphanLog:true},{removedLog:true},{reorgDuringProof:true}]){
  const h=harness(options);await execute(h,await prepare(h));h.mutable.stage='confirmed';const op=await h.bridge.refreshNodeBridgeOperation(wallet.address);assert.notEqual(op.status,'complete',JSON.stringify(options));await assert.rejects(prepare(h));}
+});
+
+
+test('bridge reviews from before an account outage cannot resume after verification recovers',async()=>{
+ const h=harness({fixedRoot:true}),v=h.vault();v.setNodeAccountAccess('a'.repeat(64),true,true);
+ const original=v.createNodeSession(1),backup=await v.encryptNodeBackup(original,'inert bridge account fixture'),session=await v.restoreNodeBackup(backup,'inert bridge account fixture');
+ const review=await v.prepareNodeBridge(session,0,'0.005');v.setNodeAccountAccess('a'.repeat(64),true,false);
+ assert.equal(v.isVerifiedNodeSession(session),true);v.setNodeAccountAccess('a'.repeat(64),true,true);
+ await assert.rejects(v.executeNodeBridge(session,review),/verification changed/);assert.equal(h.calls.filter(c=>c==='eth_sendRawTransaction').length,0);
 });

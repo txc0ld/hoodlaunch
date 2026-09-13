@@ -1,5 +1,5 @@
 import { BigNumber } from 'ethers';
-import { MAX_NODES, isVerifiedNodeSession, prepareNodeTrade, executeNodeTrade } from './node-vault';
+import { MAX_NODES, getNodeFinancialEpoch, assertNodeFinancialEpoch, isVerifiedNodeSession, prepareNodeTrade, executeNodeTrade } from './node-vault';
 import type { NodeSession } from './node-vault';
 import { tradeAddress } from './pons-trade';
 import type { NodeTradeSide } from './pons-trade';
@@ -22,7 +22,7 @@ export interface NodeTradeBatchResult {
 }
 const BATCH_INTENT_MS=5*60*1000;
 const RENEW_BEFORE_MS=15000;
-const batches=new WeakMap<NodeTradeBatch,{session:NodeSession;used:boolean}>();
+const batches=new WeakMap<NodeTradeBatch,{session:NodeSession;used:boolean;financialEpoch:number}>();
 function errorText(error:unknown):string {return error instanceof Error?error.message.slice(0,300):'The node action could not be completed.';}
 function active(session:NodeSession,assertCurrent:()=>void):void {
   assertCurrent();
@@ -37,6 +37,8 @@ function validateReview(review:NodeTradeReview,index:number,node:string,token:st
 }
 
 export async function prepareNodeTradeBatch(session:NodeSession,token:string,side:NodeTradeSide,assertCurrent:()=>void):Promise<NodeTradeBatch> {
+  const financialEpoch=getNodeFinancialEpoch(session),originalAssert=assertCurrent;
+  assertCurrent=()=>{assertNodeFinancialEpoch(session,financialEpoch);originalAssert();};
   active(session,assertCurrent);token=tradeAddress(token);
   const expiresAt=Date.now()+BATCH_INTENT_MS;
   const assertIntent=()=>{active(session,assertCurrent);if(Date.now()>=expiresAt)throw new Error('The batch intent expired. Prepare a fresh batch.');};
@@ -65,12 +67,13 @@ export async function prepareNodeTradeBatch(session:NodeSession,token:string,sid
     return Object.freeze(entry);
   });
   const batch:NodeTradeBatch=Object.freeze({tokenAddress:token,side,mode,entries:Object.freeze(frozen),expiresAt,maxGasCostWei:maxGas.toString(),maxTotalEthWei:maxTotal.toString()});
-  batches.set(batch,{session,used:false});return batch;
+  batches.set(batch,{session,used:false,financialEpoch});return batch;
 }
 
 export async function executeNodeTradeBatch(session:NodeSession,batch:NodeTradeBatch,assertCurrent:()=>void,onProgress?:(result:NodeTradeBatchResult)=>void):Promise<readonly NodeTradeBatchResult[]> {
   const cap=batches.get(batch);
   if(!cap||cap.session!==session||cap.used)throw new Error('This batch review is invalid or already used.');
+  const originalAssert=assertCurrent;assertCurrent=()=>{assertNodeFinancialEpoch(session,cap.financialEpoch);originalAssert();};
   active(session,assertCurrent);
   if(batch.expiresAt<=Date.now()||!batch.entries.some(entry=>entry.status==='ready'))throw new Error('No current executable batch review exists. Prepare a fresh batch.');
   // Consume before the first await: duplicate clicks can never enter a second loop.

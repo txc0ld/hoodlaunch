@@ -111,7 +111,7 @@ test('snapshots label migration and report same-block exact balances and supply 
  const h=harness({phase:1});const s=await h.p.getNodeTradingSnapshot(TOKEN,[wallet.address]);assert.equal(s.tradingAvailable,false);assert.equal(s.phase,1);assert.equal(s.balances[0].supplySharePercent,'0.010000');assert.equal(s.balances[0].ethBalanceWei,eth('1').toString());assert.ok(Object.isFrozen(s.balances));
 });
 test('narrow vault requires recovered session and does not expose a generic signer',async()=>{
- const h=harness({fixedRoot:true}),v=h.vault(),s=v.createNodeSession(1);await assert.rejects(v.prepareNodeTrade(s,0,TOKEN,'buy',5));
+ const h=harness({fixedRoot:true}),v=h.vault();v.setNodeAccountAccess('a'.repeat(64),true,true);const s=v.createNodeSession(1);await assert.rejects(v.prepareNodeTrade(s,0,TOKEN,'buy',5));
  const backup=await v.encryptNodeBackup(s,'disposable trade password'),restored=await v.restoreNodeBackup(backup,'disposable trade password');
  for(const stage of ['estimate','sign']){
   h.state.selectionActive=true;const review=await v.prepareNodeTrade(restored,0,TOKEN,'buy',5);

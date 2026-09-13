@@ -309,7 +309,7 @@ function actualProviderTrading(url, options = {}) {
   const trading = load('node-trading');
   const wallets = options.wallets || [wallet];
   const session = Object.freeze({ id: 'inert-roundtrip', backupVerified: true, addresses: Object.freeze(wallets.map(w => w.address)) });
-  modules['node-vault'] = { MAX_NODES: 50, isVerifiedNodeSession: value => value === session,
+  modules['node-vault'] = { MAX_NODES: 50, getNodeFinancialEpoch: () => 1, assertNodeFinancialEpoch: () => {}, isVerifiedNodeSession: value => value === session,
     prepareNodeTrade: (s, index, token, side, percent) => { assert.equal(s, session); return trading.prepareTrade(session, index, wallets[index].address, token, side, percent, () => {}); },
     executeNodeTrade: (s, review, guard) => { assert.equal(s, session); return trading.executeTrade(session, review, guard, tx => wallets[review.nodeIndex].signTransaction(tx)); }
   };

@@ -115,8 +115,8 @@ function normalizeSocialUrl(value: string, host?: string) {
 
 // This boundary is keyed by every account/capability input below. Keeping the
 // session here prevents even the first render of a new owner from seeing it.
-function WalletWorkspace({ sessionIdentity, proEnabled, generationEnabled, nodeTradingEnabled, financeEnabled, launchedTokenAddress, children }: {
-  sessionIdentity: string | null; proEnabled: boolean; generationEnabled: boolean;
+function WalletWorkspace({ accountReadiness, sessionIdentity, proEnabled, generationEnabled, nodeTradingEnabled, financeEnabled, launchedTokenAddress, children }: {
+  accountReadiness: boolean; sessionIdentity: string | null; proEnabled: boolean; generationEnabled: boolean;
   nodeTradingEnabled: boolean; financeEnabled: boolean; launchedTokenAddress: string; children: ReactNode;
 }) {
   const [nodeSession, setNodeSession] = useState<NodeSession | null>(null);
@@ -143,14 +143,14 @@ function WalletWorkspace({ sessionIdentity, proEnabled, generationEnabled, nodeT
     {children}
     <section id="wallet-workspace" className={styles.integrationSlot} aria-label="Wallet generator" tabIndex={-1}>
       <div className={styles.workspaceIntro}><p className={styles.eyebrow}>03 / WALLETS</p><h2>Wallet workspace</h2><p>Generate or restore controlled wallets, verify the backup, then <a href="#node-trading">load a token to trade</a>.</p></div>
-      {!generationEnabled ? <p className={styles.pendingNotice} role="status">Wallet creation and recovery are currently unavailable.</p> : !sessionIdentity ? <p className={styles.pendingNotice}><a href="#pro-account">Sign in to create or restore wallets.</a></p> : <NodeManager sessionIdentity={sessionIdentity} proEnabled={proEnabled} financeEnabled={proEnabled && financeEnabled} balanceRefreshVersion={nodeBalanceRefreshVersion} onSessionChange={acceptSession} />}
+      {!generationEnabled ? <p className={styles.pendingNotice} role="status">Wallet creation and recovery are currently unavailable.</p> : !sessionIdentity ? <p className={styles.pendingNotice}><a href="#pro-account">Sign in to create or restore wallets.</a></p> : <NodeManager accountReadiness={accountReadiness} sessionIdentity={sessionIdentity} proEnabled={proEnabled} financeEnabled={proEnabled && financeEnabled} balanceRefreshVersion={nodeBalanceRefreshVersion} onSessionChange={acceptSession} />}
     </section>
-    {canTrade ? <NodeTrading session={nodeSession} launchedTokenAddress={launchedTokenAddress} onNodeBalancesRefresh={refreshNodeBalances} /> : <section id="node-trading" className={styles.pendingNotice} tabIndex={-1} aria-labelledby="trading-unavailable-title"><h2 id="trading-unavailable-title">Multi-wallet buying & selling</h2><span>Trade existing native ETH-paired PONS tokens using your verified wallets. Trading availability is separate from launching a new token.</span>{!generationEnabled || !nodeTradingEnabled ? <p role="status">Multi-wallet trading is currently unavailable.</p> : !sessionIdentity ? <a href="#pro-account">Sign in with Pro access to use multi-wallet trading.</a> : <p>Multi-wallet trading requires Pro. <a href="#pro-account">Check your account access.</a></p>}</section>}
+    {canTrade ? <NodeTrading accountReadiness={accountReadiness} session={nodeSession} launchedTokenAddress={launchedTokenAddress} onNodeBalancesRefresh={refreshNodeBalances} /> : <section id="node-trading" className={styles.pendingNotice} tabIndex={-1} aria-labelledby="trading-unavailable-title"><h2 id="trading-unavailable-title">Multi-wallet buying & selling</h2><span>Trade existing native ETH-paired PONS tokens using your verified wallets. Trading availability is separate from launching a new token.</span>{!generationEnabled || !nodeTradingEnabled ? <p role="status">Multi-wallet trading is currently unavailable.</p> : !sessionIdentity ? <a href="#pro-account">Sign in with Pro access to use multi-wallet trading.</a> : <p>Multi-wallet trading requires Pro. <a href="#pro-account">Check your account access.</a></p>}</section>}
   </>;
 }
 
-export interface PonsLaunchpadProps { financeEnabled?: boolean; nodeTradingEnabled?: boolean; generationEnabled?: boolean; sessionIdentity?: string | null; proEnabled?: boolean; proPanel?: ReactNode; launchEnabled?: boolean; }
-export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled=false, financeEnabled=false, generationEnabled=false, nodeTradingEnabled=false, sessionIdentity=null}: PonsLaunchpadProps) {
+export interface PonsLaunchpadProps { accountReadiness?: boolean; financeEnabled?: boolean; nodeTradingEnabled?: boolean; generationEnabled?: boolean; sessionIdentity?: string | null; proEnabled?: boolean; proPanel?: ReactNode; launchEnabled?: boolean; }
+export default function PonsLaunchpad({accountReadiness=false, proEnabled=false, proPanel, launchEnabled=false, financeEnabled=false, generationEnabled=false, nodeTradingEnabled=false, sessionIdentity=null}: PonsLaunchpadProps) {
   const [protocol, setProtocol] = useState<ProtocolState | null>(null);
   const [protocolError, setProtocolError] = useState("");
   const [protocolLoading, setProtocolLoading] = useState(true);
@@ -572,7 +572,7 @@ export default function PonsLaunchpad({proEnabled=false, proPanel, launchEnabled
       <LabHero />
       {proPanel}
       {!launchEnabled && <p className={styles.pendingNotice} role="status">Token launch preview — live launching is not enabled yet. Wallet creation and trading have separate availability below.</p>}
-      <WalletWorkspace key={JSON.stringify([sessionIdentity, proEnabled, generationEnabled, nodeTradingEnabled, financeEnabled])} sessionIdentity={sessionIdentity} proEnabled={proEnabled} generationEnabled={generationEnabled} nodeTradingEnabled={nodeTradingEnabled} financeEnabled={financeEnabled} launchedTokenAddress={receipt?.pairToken ? "" : receipt?.tokenAddress || ""}>
+      <WalletWorkspace accountReadiness={accountReadiness} key={JSON.stringify([sessionIdentity, proEnabled, generationEnabled, nodeTradingEnabled, financeEnabled])} sessionIdentity={sessionIdentity} proEnabled={proEnabled} generationEnabled={generationEnabled} nodeTradingEnabled={nodeTradingEnabled} financeEnabled={financeEnabled} launchedTokenAddress={receipt?.pairToken ? "" : receipt?.tokenAddress || ""}>
 
       <section id="launch" className={styles.shell} aria-labelledby="launch-title">
         <div className={styles.formPane}>

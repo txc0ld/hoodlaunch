@@ -5,7 +5,7 @@ function harness(options={}){
  const state={active:true,verified:true,now:100000,prepares:[],executes:[],retired:[],concurrent:0,maxConcurrent:0};
  class Clock extends Date{static now(){return state.now;}}
  const assertCurrent=()=>{if(!state.active)throw Error('selection changed');};
- const vault={MAX_NODES:50,isVerifiedNodeSession:s=>s===session&&state.verified,
+ const vault={MAX_NODES:50,getNodeFinancialEpoch:()=>1,assertNodeFinancialEpoch:()=>{},isVerifiedNodeSession:s=>s===session&&state.verified,
   prepareNodeTrade:async(s,index,token,side,percent)=>{
    state.prepares.push(index);state.concurrent++;state.maxConcurrent=Math.max(state.maxConcurrent,state.concurrent);
    await new Promise(r=>setTimeout(r,1));state.concurrent--;state.now+=options.prepareAdvance||0;

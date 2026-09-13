@@ -33,7 +33,7 @@ const modules={
  },
  '../lib/pons-trade':{
   copyTradeAmount:value=>value,parseTradeAmount:()=>ethers.BigNumber.from(1),
-  getNodeTradingSnapshot:async()=>{state.snapshotCalls++;if(state.snapshotFailures>0){state.snapshotFailures--;throw Error('Temporary holdings RPC failure');}return {tokenAddress:TOKEN,symbol:'TEST',decimals:18,totalSupplyRaw:'1000000000000000000000',phase:0,blockNumber:state.confirmed?101:100,phaseMessage:'Trading available',tradingAvailable:true,balances:nodes.map(node=>({nodeAddress:node,ethBalanceWei:'1000000000000000000',tokenBalanceRaw:state.confirmed?'1000000000000000000':'0',supplySharePercent:state.confirmed?'0.1':'0'}))};}
+  getNodeTradingSnapshot:async(token=TOKEN)=>{state.snapshotCalls++;if(state.holdSnapshots)await new Promise(resolve=>(state.snapshotResolvers||(state.snapshotResolvers=[])).push(resolve));if(state.snapshotFailures>0){state.snapshotFailures--;throw Error('Temporary holdings RPC failure');}return {tokenAddress:token,symbol:'TEST',decimals:18,totalSupplyRaw:'1000000000000000000000',phase:0,blockNumber:state.confirmed?101:100,phaseMessage:'Trading available',tradingAvailable:true,balances:nodes.map(node=>({nodeAddress:node,ethBalanceWei:'1000000000000000000',tokenBalanceRaw:state.confirmed?'1000000000000000000':'0',supplySharePercent:state.confirmed?'0.1':'0'}))};}
  },
  '../lib/node-trade-batch':{
   prepareNodeTradeBatch:async(current,token,side,assertCurrent)=>{assertCurrent();state.batchPrepares.push(side);const entries=nodes.map((node,index)=>{const existing=state.operations[node.toLowerCase()];return existing&&['pending','unknown'].includes(existing.status)?{nodeIndex:index,nodeAddress:node,status:'blocked',error:'Check the recorded transaction before another action.'}:{nodeIndex:index,nodeAddress:node,status:'ready',review:review(node,index,side)};});const ready=entries.filter(entry=>entry.status==='ready');return {tokenAddress:token,side,mode:'trades',entries,expiresAt:ready.length?Date.now()+30000:0,maxGasCostWei:String(ready.length*100000000000000),maxTotalEthWei:String(ready.length*100000000000000)};},
@@ -41,7 +41,7 @@ const modules={
  }
 };
 const component={exports:{}};new Function('require','module','exports',${JSON.stringify(source)})(id=>modules[id]||(id.endsWith('.css')?{default:new Proxy({},{get:(_,key)=>String(key)})}:null),component,component.exports);
-const root=ReactDOM.createRoot(document.getElementById('root'));root.render(jsx(component.exports.default,{session,launchedTokenAddress:TOKEN,onNodeBalancesRefresh:()=>state.nodeBalanceCallbacks++}));
+const root=ReactDOM.createRoot(document.getElementById('root')),balanceRefresh=()=>state.nodeBalanceCallbacks++;window.setAccountReadiness=value=>root.render(jsx(component.exports.default,{session,accountReadiness:value,launchedTokenAddress:TOKEN,onNodeBalancesRefresh:balanceRefresh}));window.setAccountReadiness(true);
 window.test={state,replacePrevious:()=>{state.operations[nodes[0].toLowerCase()]=operation(nodes[0],'sell','pending',PREVIOUS_TOKEN,90);},confirmPrevious:()=>{state.confirmPrevious=true;},confirmFirst:()=>{state.confirmedNodes.add(nodes[0].toLowerCase());},normalSpeed:()=>{state.slowNode='';},confirmWithFailures:()=>{state.confirmed=true;state.slowNode=nodes[1];state.failNode=nodes[4].toLowerCase();state.failNodeCount=3;state.snapshotFailures=1;},prepareHeldRead:()=>{state.confirmed=false;state.confirmedNodes.clear();state.slowNode='';state.hangReads=true;},releaseHungReads:()=>{state.hangReads=false;state.hungResolvers.splice(0).forEach(resolve=>resolve());},holdBatch:()=>{state.holdBatch=true;},releaseBatch:()=>{state.holdBatch=false;window.releaseHeldBatch();},focus:()=>window.dispatchEvent(new Event('focus')),visible:()=>document.dispatchEvent(new Event('visibilitychange')),unmount:()=>root.unmount()};
 `;
 const html = '<!doctype html><style>body{margin:0}.spacer{height:700px}</style><div class="spacer"></div><div id="root"></div><script>' + ethersSource.replace(/<\/script/gi, '<\\/script') + '</script><script>' + setup.replace(/<\/script/gi, '<\\/script') + '</script>';
@@ -56,6 +56,10 @@ const html = '<!doctype html><style>body{margin:0}.spacer{height:700px}</style><
     page.on('pageerror', error => errors.push(error.message));
     await page.goto('http://localhost:41924/');
     await page.getByRole('button', { name: 'Buy Max All Nodes', exact: true }).waitFor();
+    await page.evaluate(()=>window.setAccountReadiness(false));
+    assert.equal(await page.getByRole('button',{name:'Buy Max All Nodes',exact:true}).isDisabled(),true);
+    assert.equal(await page.getByRole('button',{name:/Refresh all/}).isEnabled(),true);
+    await page.evaluate(()=>window.setAccountReadiness(true));
     assert.equal(await page.getByText('Robinhood transaction pending', { exact: true }).count(), 1, 'A pending operation from another token is shown against the selected-token holdings');
     await page.getByLabel('PONS token address').fill('0xdead');
     assert.equal(await page.getByRole('button', { name: 'Buy Max All Nodes', exact: true }).count(), 0, 'Changing the token clears the stale holdings snapshot');
@@ -151,6 +155,20 @@ const html = '<!doctype html><style>body{margin:0}.spacer{height:700px}</style><
     assert.equal(await page.locator('#root').textContent(), '', 'A held status response cannot publish after the wallet workspace unmounts');
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ pass: true, check: 'Buy All confirmations refresh status and holdings, keep viewport stable, and allow Sell All' }));
+    const slowPage=await context.newPage();slowPage.on('pageerror',error=>errors.push(error.message));
+    await slowPage.goto('http://localhost:41924/');await slowPage.getByRole('button',{name:'Buy Max All Nodes',exact:true}).waitFor();
+    const snapshotBaseline=await slowPage.evaluate(()=>{test.state.holdSnapshots=true;return test.state.snapshotCalls;});
+    for(let attempt=0;attempt<3;attempt++){
+      await slowPage.getByRole('button',{name:attempt===0?'Refresh holdings':'Verify token and load holdings',exact:true}).click();
+      await slowPage.getByText('Holdings refresh timed out.',{exact:true}).waitFor();
+      assert.equal(await slowPage.getByLabel('PONS token address').isEnabled(),true,'snapshot timeout releases the loading UI');
+    }
+    assert.equal(await slowPage.evaluate(()=>test.state.snapshotCalls),snapshotBaseline+1,'manual retries join the still-running holdings snapshot');
+    const changedToken='0x9999999999999999999999999999999999999999';await slowPage.getByLabel('PONS token address').fill(changedToken);
+    await slowPage.evaluate(()=>{test.state.holdSnapshots=false;test.state.snapshotResolvers.splice(0).forEach(resolve=>resolve());});await slowPage.waitForTimeout(100);
+    assert.equal(await slowPage.getByLabel('PONS token address').inputValue(),changedToken);
+    assert.equal(await slowPage.getByRole('button',{name:'Buy Max All Nodes',exact:true}).count(),0,'late old snapshot cannot restore a cleared selection');
+    assert.deepEqual(errors,[]);
     await context.close();
   } finally {
     await browser.close();
