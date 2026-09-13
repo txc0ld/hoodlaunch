@@ -19,6 +19,8 @@ import styles from "./NodeTrading.module.css";
 const PERCENTS: readonly NodeTradePercent[] = [5, 10, 25, 50, 100];
 const STATUS_REFRESH_DEADLINE_MS = 20_000;
 const HOLDINGS_REFRESH_RETRIES = 3;
+const STATUS_REFRESH_CONCURRENCY = 3;
+const statusReads = new Map<string, Promise<NodeTradeOperation>>();
 
 type Action = "idle" | "loading" | "preparing" | "executing" | "refreshing";
 type SubmissionOutcome = { label: string; error: string };
@@ -112,6 +114,18 @@ async function beforeDeadline<T>(start: () => Promise<T>, deadline: number, mess
   }
 }
 
+function statusRead(address: string, txHash: string) {
+  const key = `${address.toLowerCase()}:${txHash}`;
+  const existing = statusReads.get(key);
+  if (existing) return existing;
+  if (statusReads.size >= STATUS_REFRESH_CONCURRENCY) throw new Error("Three transaction status checks are still in progress.");
+  const pending = refreshNodeTradeOperation(address).finally(() => {
+    if (statusReads.get(key) === pending) statusReads.delete(key);
+  });
+  statusReads.set(key, pending);
+  return pending;
+}
+
 export interface NodeTradingProps {
   session: NodeSession | null;
   launchedTokenAddress?: string;
@@ -143,6 +157,7 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
   const actionRef = useRef<Action>("idle");
   const stopBatchRef = useRef(false);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
+  const refreshLifecycleRef = useRef(0);
   const refreshQueuedRef = useRef(false);
   const refreshQueuedManualRef = useRef(false);
   const refreshTargetsRef = useRef<Set<string>>(new Set());
@@ -181,8 +196,10 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
     if (manual) {
       manualRefreshRequestedRef.current = true;
       holdingsRefreshAttemptsRef.current = 0;
-      holdingsRefreshVersionRef.current += 1;
-      setHoldingsRefreshPending(true);
+      if (snapshot) {
+        holdingsRefreshVersionRef.current += 1;
+        setHoldingsRefreshPending(true);
+      }
     }
     if (refreshPromiseRef.current) {
       const hasNewOperation = session?.addresses.some((address) => {
@@ -197,6 +214,7 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
     const currentSession = session;
     const selectedToken = snapshot?.tokenAddress || null;
     const generation = generationRef.current;
+    const lifecycle = refreshLifecycleRef.current;
     const unresolved = currentSession.addresses.flatMap((address) => {
       const operation = operationsRef.current[address.toLowerCase()];
       return operation && (operation.status === "pending" || operation.status === "unknown")
@@ -205,12 +223,15 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
     });
     const holdingsDue = holdingsAppliedVersionRef.current < holdingsRefreshVersionRef.current && holdingsRefreshAttemptsRef.current < HOLDINGS_REFRESH_RETRIES;
     if (!unresolved.length && !manualRefreshRequestedRef.current && !holdingsDue) return Promise.resolve();
-    const current = () => generation === generationRef.current && selectionRef.current.session === currentSession;
+    const sessionCurrent = () => refreshLifecycleRef.current === lifecycle && selectionRef.current.session === currentSession;
+    const selectionCurrent = () => generation === generationRef.current && sessionCurrent();
     const failures: string[] = [];
     let checked = 0;
     let holdingsPromise: Promise<void> | null = null;
+    let nodeBalancesRequested = false;
+    let tokenHoldingsRefreshed = false;
     const publish = (target: typeof unresolved[number], operation: NodeTradeOperation) => {
-      if (!current() || operation.txHash !== target.txHash || operation.nodeAddress.toLowerCase() !== target.address.toLowerCase() || operation.tokenAddress.toLowerCase() !== target.tokenAddress.toLowerCase()) return;
+      if (!sessionCurrent() || operation.txHash !== target.txHash || operation.nodeAddress.toLowerCase() !== target.address.toLowerCase() || operation.tokenAddress.toLowerCase() !== target.tokenAddress.toLowerCase()) return;
       let stored: NodeTradeOperation | null;
       try { stored = getNodeTradeOperation(target.address); } catch { return; }
       const key = target.address.toLowerCase();
@@ -248,19 +269,21 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
       const maybeRefreshHoldings = () => {
         const forceManual = manualRefreshRequestedRef.current;
         const requestedVersion = holdingsRefreshVersionRef.current;
-        if (holdingsPromise || !current() || !selectedToken || (!forceManual && (holdingsAppliedVersionRef.current >= requestedVersion || holdingsRefreshAttemptsRef.current >= HOLDINGS_REFRESH_RETRIES))) return;
+        if (holdingsPromise || !selectionCurrent() || !selectedToken || (!forceManual && (holdingsAppliedVersionRef.current >= requestedVersion || holdingsRefreshAttemptsRef.current >= HOLDINGS_REFRESH_RETRIES))) return;
         refreshHoldingsStartedRef.current = true;
         holdingsPromise = (async () => {
           try {
             const nextSnapshot = await beforeDeadline(() => getNodeTradingSnapshot(selectedToken, currentSession.addresses), deadline, "Holdings refresh timed out.");
-            if (!current() || nextSnapshot.tokenAddress.toLowerCase() !== selectedToken.toLowerCase()) return;
+            if (!selectionCurrent() || nextSnapshot.tokenAddress.toLowerCase() !== selectedToken.toLowerCase()) return;
             setSnapshot(nextSnapshot);
+            tokenHoldingsRefreshed = true;
             holdingsAppliedVersionRef.current = Math.max(holdingsAppliedVersionRef.current, requestedVersion);
             holdingsRefreshAttemptsRef.current = 0;
             setHoldingsRefreshPending(holdingsAppliedVersionRef.current < holdingsRefreshVersionRef.current);
             onNodeBalancesRefresh?.();
+            nodeBalancesRequested = true;
           } catch (caught) {
-            if (!current()) return;
+            if (!sessionCurrent()) return;
             failures.push(safeMessage(caught));
             if (!forceManual) {
               holdingsRefreshAttemptsRef.current += 1;
@@ -273,40 +296,45 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
       };
       let next = 0;
       async function worker() {
-        while (next < unresolved.length && current() && Date.now() < deadline) {
+        while (next < unresolved.length && sessionCurrent() && Date.now() < deadline) {
           const target = unresolved[next++];
           try {
-            publish(target, await beforeDeadline(() => refreshNodeTradeOperation(target.address), deadline, "Transaction status refresh timed out."));
+            publish(target, await beforeDeadline(() => statusRead(target.address, target.txHash), deadline, "Transaction status refresh timed out."));
           } catch (caught) {
             failures.push(safeMessage(caught));
           } finally {
             checked += 1;
-            if (current()) setRefreshProgress({ checked, total: unresolved.length, failures: failures.length });
+            if (sessionCurrent()) setRefreshProgress({ checked, total: unresolved.length, failures: failures.length });
             maybeRefreshHoldings();
           }
         }
       }
-      await Promise.all(Array.from({ length: Math.min(3, unresolved.length) }, () => worker()));
-      if (!current()) return;
+      await Promise.all(Array.from({ length: Math.min(STATUS_REFRESH_CONCURRENCY, unresolved.length) }, () => worker()));
+      if (!sessionCurrent()) return;
       if (next < unresolved.length) failures.push("Transaction status refresh timed out before every node was checked.");
       maybeRefreshHoldings();
       if (holdingsPromise) await holdingsPromise;
-      if (current()) setRefreshNotice(failures.length
+      const manualHandledHere = manualRefreshRequestedRef.current && !refreshQueuedManualRef.current;
+      if (sessionCurrent() && manualHandledHere && !nodeBalancesRequested) {
+        onNodeBalancesRefresh?.();
+        nodeBalancesRequested = true;
+      }
+      if (sessionCurrent()) setRefreshNotice(failures.length
         ? `Refresh incomplete · ${failures.length} check${failures.length === 1 ? "" : "s"} failed. ${failures[0]} Pending or unknown nodes remain blocked.`
-        : manualRefreshRequestedRef.current ? "Transactions and node holdings refreshed." : "");
+        : manualHandledHere ? tokenHoldingsRefreshed ? "Transactions and node holdings refreshed." : "Transactions checked and node balance refresh requested." : "");
     })().finally(() => {
-      const runAgain = refreshQueuedRef.current;
-      const manualAgain = refreshQueuedManualRef.current;
-      manualRefreshRequestedRef.current = manualAgain;
-      refreshQueuedRef.current = false;
-      refreshQueuedManualRef.current = false;
-      refreshTargetsRef.current.clear();
-      refreshHoldingsStartedRef.current = false;
       if (refreshPromiseRef.current === promise) {
+        const runAgain = refreshQueuedRef.current;
+        const manualAgain = refreshQueuedManualRef.current;
+        manualRefreshRequestedRef.current = manualAgain;
+        refreshQueuedRef.current = false;
+        refreshQueuedManualRef.current = false;
+        refreshTargetsRef.current.clear();
+        refreshHoldingsStartedRef.current = false;
         refreshPromiseRef.current = null;
-        if (current()) {
+        if (sessionCurrent()) {
           setRefreshingAll(false);
-          if (runAgain) setTimeout(() => { if (current()) void refreshAll(false); }, 0);
+          if (runAgain) setTimeout(() => { if (sessionCurrent()) void refreshAll(false); }, 0);
         }
       }
     });
@@ -341,6 +369,7 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
   }
 
   useEffect(() => {
+    refreshLifecycleRef.current += 1;
     const generation = ++generationRef.current;
     actionRef.current = "idle";
     setAction("idle");
@@ -350,6 +379,7 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
     setCustomErrors({});
     setReview(null);
     setBatch(null);
+    batchResultsRef.current = [];
     setBatchResults([]);
     setStopping(false);
     setBatchActive(false);
@@ -380,6 +410,7 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
       void loadSnapshot(launchedTokenAddress, session, generation);
     }
     return () => {
+      refreshLifecycleRef.current += 1;
       generationRef.current += 1;
       actionRef.current = "idle";
     };
@@ -421,6 +452,7 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
     setCustomErrors({});
     setReview(null);
     setBatch(null);
+    batchResultsRef.current = [];
     setBatchResults([]);
     setError("");
   }
@@ -438,7 +470,7 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
   }
 
   function handleRefreshAll() {
-    if (!session || !snapshot) return;
+    if (!session) return;
     setRefreshNotice("");
     void refreshAll(true);
   }
@@ -471,6 +503,7 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
     setAction("preparing");
     setReview(null);
     setBatch(null);
+    batchResultsRef.current = [];
     setBatchResults([]);
     setError("");
     setTradeOutcome(null);
@@ -523,6 +556,7 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
     setAction("preparing");
     setReview(null);
     setBatch(null);
+    batchResultsRef.current = [];
     setBatchResults([]);
     setError("");
     setStopping(false);
@@ -537,9 +571,12 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
     };
     const onProgress = (result: NodeTradeBatchResult) => {
       if (generation !== generationRef.current || selectionRef.current.session !== currentSession || selectionRef.current.launchedTokenAddress !== currentLaunch) return;
-      setBatchResults((current) => [...current.filter((row) => row.nodeIndex !== result.nodeIndex), result].sort((a, b) => a.nodeIndex - b.nodeIndex));
+      const nextResults = [...batchResultsRef.current.filter((row) => row.nodeIndex !== result.nodeIndex), result].sort((a, b) => a.nodeIndex - b.nodeIndex);
+      batchResultsRef.current = nextResults;
+      setBatchResults(nextResults);
       if (result.operation) {
         const operation = result.operation;
+        operationsRef.current = { ...operationsRef.current, [operation.nodeAddress.toLowerCase()]: operation };
         setOperations((current) => ({ ...current, [operation.nodeAddress.toLowerCase()]: operation }));
       }
     };
@@ -558,13 +595,23 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
       setBatchOutcome({ label: "Submitting", error: "" });
       const results = await executeNodeTradeBatch(currentSession, next, assertCurrent, onProgress);
       if (generation === generationRef.current && selectionRef.current.session === currentSession && selectionRef.current.launchedTokenAddress === currentLaunch) {
-        setBatchResults(results);
-        const uncertain = results.find((result) => result.status === "unknown");
-        const notSubmitted = results.find((result) => result.status === "error" || result.status === "not-submitted");
-        const submitted = results.some((result) => result.status === "submitted");
+        const currentResults = new Map(batchResultsRef.current.map((result) => [result.nodeAddress.toLowerCase(), result]));
+        const mergedResults = results.map((result) => {
+          const operation = result.operation;
+          if (!operation) return result;
+          const live = operationsRef.current[result.nodeAddress.toLowerCase()];
+          const progressive = currentResults.get(result.nodeAddress.toLowerCase())?.operation;
+          const latest = live?.txHash === operation.txHash ? live : progressive?.txHash === operation.txHash ? progressive : operation;
+          return latest === operation ? result : { ...result, operation: latest };
+        });
+        batchResultsRef.current = mergedResults;
+        setBatchResults(mergedResults);
+        const uncertain = mergedResults.find((result) => result.status === "unknown" || result.operation?.status === "unknown");
+        const notSubmitted = mergedResults.find((result) => result.status === "error" || result.status === "not-submitted");
+        const submitted = mergedResults.some((result) => result.status === "submitted");
         setBatchOutcome(uncertain ? { label: "Outcome unknown", error: uncertain.error || uncertain.operation?.message || "Check the recorded transaction hash before another action." }
           : notSubmitted ? { label: submitted ? "Some nodes submitted · others not submitted" : "Could not submit", error: notSubmitted.error || "Check each node's result below." }
-          : { label: "Submitted · awaiting confirmation", error: "" });
+          : refreshedBatchOutcome(mergedResults));
       }
     } catch (caught) {
       if (generation === generationRef.current && selectionRef.current.session === currentSession && selectionRef.current.launchedTokenAddress === currentLaunch) {
@@ -590,7 +637,8 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
     setAction("refreshing");
     setError("");
     try {
-      const operation = await refreshNodeTradeOperation(address);
+      if (!previous) throw new Error("No recorded trade exists for this node.");
+      const operation = await beforeDeadline(() => statusRead(address, previous.txHash), Date.now() + STATUS_REFRESH_DEADLINE_MS, "Transaction status refresh timed out.");
       if (generation !== generationRef.current) return;
       if (previous && operation.txHash !== previous.txHash) return;
       setOperations((current) => ({ ...current, [address.toLowerCase()]: operation }));
@@ -636,6 +684,8 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
           <div className={styles.tokenPicker}><label><span>PONS token address</span><input value={tokenInput} onChange={(event) => updateToken(event.target.value)} placeholder="0x…" autoComplete="off" aria-label="PONS token address" disabled={action !== "idle"} /></label><button className={styles.primaryButton} type="button" onClick={handleLoad} disabled={!tokenInput.trim() || action !== "idle"}>{action === "loading" ? "Verifying token…" : snapshot ? "Refresh holdings" : "Verify token and load holdings"}</button></div>
           {launchedTokenAddress && tokenInput.toLowerCase() === launchedTokenAddress.toLowerCase() && <p className={styles.phase}>Selected automatically from this page’s verified launch receipt.</p>}
           <p className={styles.phase}>Transaction protection applies in this browser profile and site address. Other devices or profiles, or clearing browser storage, can bypass it. Preserve transaction hashes.</p>
+          <div className={styles.bulkToolbar} aria-label="Refresh transaction and node status"><div><strong>Transactions & nodes</strong><p>Pending transactions refresh automatically while this page is visible. Refresh checks only; it never funds a node or resubmits a transaction.</p></div><button className={styles.secondaryButton} type="button" onClick={handleRefreshAll}>{refreshingAll ? "Refresh all requested…" : "Refresh all transactions & nodes"}</button></div>
+          <p className={styles.refreshStatus} role="status" aria-live="polite">{refreshingAll ? `Checking transactions ${refreshProgress?.checked || 0} of ${refreshProgress?.total || 0}${refreshProgress?.failures ? ` · ${refreshProgress.failures} failed` : ""}…` : refreshNotice}</p>
           {error && <div className={styles.alert} role="alert"><span>{error}</span><button type="button" onClick={() => setError("")}>Dismiss</button></div>}
           {!snapshot && action !== "loading" && <p className={styles.empty}>Enter an existing PONS token or launch one above. The factory, native ETH pair, route, phase, balances and supply are checked onchain before controls appear.</p>}
 
@@ -646,12 +696,10 @@ export default function NodeTrading({ session, launchedTokenAddress = "", onNode
             </dl>
             <p className={styles.phase}>{snapshot.phaseMessage}</p>
             <div className={styles.bulkToolbar} aria-label="Trade with all nodes">
-              <div><strong>All nodes</strong><p>Submit each eligible node’s maximum amount immediately, with ETH retained for gas. Pending transactions refresh automatically while this page is visible. Refresh checks only; it never funds a node or resubmits a transaction.</p></div>
+              <div><strong>All nodes</strong><p>Submit each eligible node’s maximum amount immediately, with ETH retained for gas.</p></div>
               <button className={styles.primaryButton} type="button" onClick={() => handlePrepareBatch("buy")} disabled={!snapshot.tradingAvailable || !rows.length || action !== "idle"}>Buy Max All Nodes</button>
               <button className={styles.secondaryButton} type="button" onClick={() => handlePrepareBatch("sell")} disabled={!snapshot.tradingAvailable || !rows.length || action !== "idle"}>Sell Max All Nodes</button>
-              <button className={styles.secondaryButton} type="button" onClick={handleRefreshAll}>{refreshingAll ? "Refresh all requested…" : "Refresh all transactions & nodes"}</button>
             </div>
-            <p className={styles.refreshStatus} role="status" aria-live="polite">{refreshingAll ? `Checking transactions ${refreshProgress?.checked || 0} of ${refreshProgress?.total || 0}${refreshProgress?.failures ? ` · ${refreshProgress.failures} failed` : ""}…` : refreshNotice}</p>
             {action === "preparing" && <p className={styles.phase} role="status">Checking fresh amounts and gas before immediate submission…</p>}
             {action === "executing" && <p className={styles.phase} role="status">Signing and submitting the selected actions…</p>}
             {batchActive && action === "preparing" && <button className={styles.secondaryButton} type="button" disabled={stopping} onClick={() => { stopBatchRef.current = true; setStopping(true); }}>{stopping ? "Stopping remaining nodes…" : "Stop remaining nodes"}</button>}
