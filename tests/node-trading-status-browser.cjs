@@ -20,10 +20,11 @@ function reactRequire(name){if(reactModules[name])return reactModules[name].expo
 const React=reactRequire('react'),ReactDOM=reactRequire('react-dom/client');
 const jsx=(type,props,key)=>React.createElement(type,{...props,key}),runtime={jsx,jsxs:jsx,Fragment:React.Fragment};
 const TOKEN='0x2222222222222222222222222222222222222222',PREVIOUS_TOKEN='0x3333333333333333333333333333333333333333',nodes=Object.freeze(Array.from({length:5},(_,index)=>'0x'+String(index+1).padStart(40,'0'))),session=Object.freeze({id:'status-fixture',addresses:nodes,backupVerified:true});
-const state={refreshCalls:0,refreshByNode:{},activeRefreshes:0,maxRefreshes:0,snapshotCalls:0,snapshotFailures:0,nodeBalanceCallbacks:0,batchPrepares:[],batchExecutes:[],batchProgress:0,holdBatch:false,hangReads:false,hungResolvers:[],confirmed:false,confirmedNodes:new Set(),confirmPrevious:false,slowNode:nodes[0],failNode:'',failNodeCount:0,operations:{}};
-function operation(node,side,status='pending',tokenAddress=TOKEN,hashOffset=10){return {nodeAddress:node,nodeIndex:nodes.indexOf(node),tokenAddress,action:side,side,status,txHash:'0x'+String(nodes.indexOf(node)+hashOffset).padStart(64,'0'),message:status==='confirmed'?'Trade confirmed on Robinhood Chain. Refresh holdings for the latest balances.':'Waiting for two Robinhood confirmations. Do not resubmit.'};}
+const scenario=new URLSearchParams(location.search).get('scenario')||'main';
+const state={scenario,refreshCalls:0,refreshByNode:{},activeRefreshes:0,maxRefreshes:0,snapshotCalls:0,snapshotFailures:0,nodeBalanceCallbacks:0,batchPrepares:[],batchExecutes:[],batchProgress:0,holdBatch:false,hangReads:false,hungResolvers:[],confirmed:false,confirmedNodes:new Set(),confirmPrevious:false,slowNode:nodes[0],failNode:'',failNodeCount:0,operations:{}};
+function operation(node,side,status='pending',tokenAddress=TOKEN,hashOffset=10,action=side){return {nodeAddress:node,nodeIndex:nodes.indexOf(node),tokenAddress,action,side,status,txHash:'0x'+String(nodes.indexOf(node)+hashOffset).padStart(64,'0'),message:status==='confirmed'?'Trade confirmed on Robinhood Chain. Refresh holdings for the latest balances.':'Waiting for two Robinhood confirmations. Do not resubmit.'};}
 function review(node,index,side){const now=Date.now();return {requestId:side+'-'+index,nodeAddress:node,nodeIndex:index,tokenAddress:TOKEN,side,percent:100,customAmount:null,decimals:18,symbol:'TEST',action:side,route:'PONS curve',amountInRaw:'1000000000000000000',expectedOutputRaw:'1000000000000000000',minimumOutputRaw:'980000000000000000',minimumIsRateBound:false,slippageBps:200,maxGasCostWei:'100000000000000',maxTotalEthWei:'100000000000000',balanceAfterMaxCostWei:'999900000000000000',requiredRemainingEthWei:'100000000000000',gasReserveWei:'100000000000000',expectedSpendWei:'0',expectedRefundWei:'0',gasLimit:'100000',maxFeePerGasWei:'1000000000',maxPriorityFeePerGasWei:'100000000',expiresAt:now+30000,createdAt:now};}
-state.operations[nodes[0].toLowerCase()]=operation(nodes[0],'sell','pending',PREVIOUS_TOKEN,50);
+if(!['partial','partial-approval','batch-replaced'].includes(scenario))state.operations[nodes[0].toLowerCase()]=operation(nodes[0],'sell','pending',PREVIOUS_TOKEN,50);
 const modules={
  'react':React,'react/jsx-runtime':runtime,'ethers':ethers,
  '../lib/node-vault':{prepareNodeTrade:async()=>{throw Error('Individual trade not expected');},executeNodeTrade:async()=>{throw Error('Individual trade not expected');}},
@@ -37,12 +38,12 @@ const modules={
  },
  '../lib/node-trade-batch':{
   prepareNodeTradeBatch:async(current,token,side,assertCurrent)=>{assertCurrent();state.batchPrepares.push(side);const entries=nodes.map((node,index)=>{const existing=state.operations[node.toLowerCase()];return existing&&['pending','unknown'].includes(existing.status)?{nodeIndex:index,nodeAddress:node,status:'blocked',error:'Check the recorded transaction before another action.'}:{nodeIndex:index,nodeAddress:node,status:'ready',review:review(node,index,side)};});const ready=entries.filter(entry=>entry.status==='ready');return {tokenAddress:token,side,mode:'trades',entries,expiresAt:ready.length?Date.now()+30000:0,maxGasCostWei:String(ready.length*100000000000000),maxTotalEthWei:String(ready.length*100000000000000)};},
-  executeNodeTradeBatch:async(current,batch,assertCurrent,onProgress)=>{assertCurrent();state.batchExecutes.push(batch.side);const results=[];for(const entry of batch.entries){if(entry.status!=='ready')continue;const op=operation(entry.nodeAddress,batch.side);state.operations[entry.nodeAddress.toLowerCase()]=op;const result={nodeIndex:entry.nodeIndex,nodeAddress:entry.nodeAddress,status:'submitted',operation:op};results.push(result);state.batchProgress=results.length;onProgress(result);if(state.holdBatch&&results.length===1)await new Promise(resolve=>window.releaseHeldBatch=resolve);assertCurrent();}return results;}
+  executeNodeTradeBatch:async(current,batch,assertCurrent,onProgress)=>{assertCurrent();state.batchExecutes.push(batch.side);if(['partial','partial-approval','batch-replaced'].includes(state.scenario)){const approval=state.scenario==='partial-approval',op=operation(nodes[0],batch.side,'pending',TOKEN,10,approval?'approve-token':batch.side);state.operations[nodes[0].toLowerCase()]=op;const results=[{nodeIndex:0,nodeAddress:nodes[0],status:'submitted',operation:op},{nodeIndex:1,nodeAddress:nodes[1],status:'error',error:'Node gas balance is below the reviewed maximum cost.'},...nodes.slice(2).map((node,index)=>({nodeIndex:index+2,nodeAddress:node,status:'not-submitted',error:'Stopped after a node could not be submitted.'}))];for(const result of results){state.batchProgress++;onProgress(result);}return results;}const results=[];for(const entry of batch.entries){if(entry.status!=='ready')continue;const op=operation(entry.nodeAddress,batch.side);state.operations[entry.nodeAddress.toLowerCase()]=op;const result={nodeIndex:entry.nodeIndex,nodeAddress:entry.nodeAddress,status:'submitted',operation:op};results.push(result);state.batchProgress=results.length;onProgress(result);if(state.holdBatch&&results.length===1)await new Promise(resolve=>window.releaseHeldBatch=resolve);assertCurrent();}return results;}
  }
 };
 const component={exports:{}};new Function('require','module','exports',${JSON.stringify(source)})(id=>modules[id]||(id.endsWith('.css')?{default:new Proxy({},{get:(_,key)=>String(key)})}:null),component,component.exports);
 const root=ReactDOM.createRoot(document.getElementById('root')),balanceRefresh=()=>state.nodeBalanceCallbacks++;window.setAccountReadiness=value=>root.render(jsx(component.exports.default,{session,accountReadiness:value,launchedTokenAddress:TOKEN,onNodeBalancesRefresh:balanceRefresh}));window.setAccountReadiness(true);
-window.test={state,replacePrevious:()=>{state.operations[nodes[0].toLowerCase()]=operation(nodes[0],'sell','pending',PREVIOUS_TOKEN,90);},confirmPrevious:()=>{state.confirmPrevious=true;},confirmFirst:()=>{state.confirmedNodes.add(nodes[0].toLowerCase());},normalSpeed:()=>{state.slowNode='';},confirmWithFailures:()=>{state.confirmed=true;state.slowNode=nodes[1];state.failNode=nodes[4].toLowerCase();state.failNodeCount=3;state.snapshotFailures=1;},prepareHeldRead:()=>{state.confirmed=false;state.confirmedNodes.clear();state.slowNode='';state.hangReads=true;},releaseHungReads:()=>{state.hangReads=false;state.hungResolvers.splice(0).forEach(resolve=>resolve());},holdBatch:()=>{state.holdBatch=true;},releaseBatch:()=>{state.holdBatch=false;window.releaseHeldBatch();},focus:()=>window.dispatchEvent(new Event('focus')),visible:()=>document.dispatchEvent(new Event('visibilitychange')),unmount:()=>root.unmount()};
+window.test={state,replacePrevious:()=>{state.operations[nodes[0].toLowerCase()]=operation(nodes[0],'sell','pending',PREVIOUS_TOKEN,90);},replaceBeforeRefresh:()=>{state.operations[nodes[0].toLowerCase()]=operation(nodes[0],'sell','confirmed',PREVIOUS_TOKEN,80);},replaceCurrentBeforeRefresh:()=>{const current=state.operations[nodes[0].toLowerCase()];state.operations[nodes[0].toLowerCase()]={...current,status:'confirmed',txHash:'0x'+String(80).padStart(64,'0'),message:'Trade confirmed on Robinhood Chain. Refresh holdings for the latest balances.'};},confirmPrevious:()=>{state.confirmPrevious=true;},confirmFirst:()=>{state.confirmedNodes.add(nodes[0].toLowerCase());},normalSpeed:()=>{state.slowNode='';},confirmWithFailures:()=>{state.confirmed=true;state.slowNode=nodes[1];state.failNode=nodes[4].toLowerCase();state.failNodeCount=3;state.snapshotFailures=1;},prepareHeldRead:()=>{state.confirmed=false;state.confirmedNodes.clear();state.slowNode='';state.hangReads=true;},releaseHungReads:()=>{state.hangReads=false;state.hungResolvers.splice(0).forEach(resolve=>resolve());},holdBatch:()=>{state.holdBatch=true;},releaseBatch:()=>{state.holdBatch=false;window.releaseHeldBatch();},focus:()=>window.dispatchEvent(new Event('focus')),visible:()=>document.dispatchEvent(new Event('visibilitychange')),unmount:()=>root.unmount()};
 `;
 const html = '<!doctype html><style>body{margin:0}.spacer{height:700px}</style><div class="spacer"></div><div id="root"></div><script>' + ethersSource.replace(/<\/script/gi, '<\\/script') + '</script><script>' + setup.replace(/<\/script/gi, '<\\/script') + '</script>';
 
@@ -168,6 +169,77 @@ const html = '<!doctype html><style>body{margin:0}.spacer{height:700px}</style><
     await slowPage.evaluate(()=>{test.state.holdSnapshots=false;test.state.snapshotResolvers.splice(0).forEach(resolve=>resolve());});await slowPage.waitForTimeout(100);
     assert.equal(await slowPage.getByLabel('PONS token address').inputValue(),changedToken);
     assert.equal(await slowPage.getByRole('button',{name:'Buy Max All Nodes',exact:true}).count(),0,'late old snapshot cannot restore a cleared selection');
+    const repairFailures=[];
+    try {
+      const newHashPage=await context.newPage();newHashPage.on('pageerror',error=>errors.push(error.message));
+      await newHashPage.goto('http://localhost:41924/?scenario=newhash');
+      await newHashPage.getByRole('button',{name:'Buy Max All Nodes',exact:true}).waitFor();
+      await newHashPage.waitForFunction(()=>test.state.refreshCalls>=1&&test.state.activeRefreshes===0);
+      assert.equal(await newHashPage.getByText('Robinhood transaction pending',{exact:true}).count(),1);
+      const beforeReplacement=await newHashPage.evaluate(()=>({calls:test.state.refreshCalls,snapshots:test.state.snapshotCalls,callbacks:test.state.nodeBalanceCallbacks}));
+      await newHashPage.evaluate(()=>{test.replaceBeforeRefresh();test.focus();});
+      await newHashPage.waitForFunction(value=>test.state.refreshCalls>value,beforeReplacement.calls);
+      await newHashPage.getByText('Trade confirmed on Robinhood Chain',{exact:true}).waitFor({timeout:3000});
+      assert.ok(await newHashPage.evaluate(()=>document.body.textContent.includes('0x'+String(80).padStart(64,'0'))),'A newer durable operation is adopted before callback-hash validation');
+      await newHashPage.waitForFunction(before=>test.state.snapshotCalls>before.snapshots&&test.state.nodeBalanceCallbacks>before.callbacks,beforeReplacement,{timeout:3000});
+      const afterReplacement=await newHashPage.evaluate(()=>({snapshots:test.state.snapshotCalls,callbacks:test.state.nodeBalanceCallbacks,batches:test.state.batchExecutes.length}));
+      assert.ok(afterReplacement.snapshots>beforeReplacement.snapshots&&afterReplacement.callbacks>beforeReplacement.callbacks,'Adopting a newer terminal operation refreshes holdings');
+      assert.equal(afterReplacement.batches,0,'Status reconciliation never replays a batch');
+      await newHashPage.close();
+    } catch(error) { repairFailures.push('newer stored hash: '+error.message); }
+    try {
+      const nodeRefreshPage=await context.newPage();nodeRefreshPage.on('pageerror',error=>errors.push(error.message));
+      await nodeRefreshPage.goto('http://localhost:41924/?scenario=node-refresh');
+      await nodeRefreshPage.getByRole('button',{name:'Buy Max All Nodes',exact:true}).waitFor();
+      await nodeRefreshPage.waitForFunction(()=>test.state.refreshCalls>=1&&test.state.activeRefreshes===0);
+      await nodeRefreshPage.evaluate(()=>test.replaceBeforeRefresh());
+      await nodeRefreshPage.getByRole('button',{name:'Refresh transaction status',exact:true}).click();
+      await nodeRefreshPage.getByText('Trade confirmed on Robinhood Chain',{exact:true}).waitFor({timeout:3000});
+      assert.ok(await nodeRefreshPage.evaluate(()=>document.body.textContent.includes('0x'+String(80).padStart(64,'0'))),'Per-node refresh adopts the newer durable operation');
+      assert.deepEqual(await nodeRefreshPage.evaluate(()=>test.state.batchExecutes),[],'Per-node reconciliation never replays a batch');
+      await nodeRefreshPage.close();
+    } catch(error) { repairFailures.push('per-node newer stored hash: '+error.message); }
+    for (const scenario of ['partial','partial-approval']) {
+      let partialPage;
+      try {
+        partialPage=await context.newPage();partialPage.on('pageerror',error=>errors.push(error.message));
+        await partialPage.goto('http://localhost:41924/?scenario='+scenario);
+        assert.equal(await partialPage.evaluate(()=>test.state.scenario),scenario);
+        const actionName=scenario==='partial'?'Buy Max All Nodes':'Sell Max All Nodes';
+        await partialPage.getByRole('button',{name:actionName,exact:true}).waitFor();
+        await partialPage.getByRole('button',{name:actionName,exact:true}).click();
+        await partialPage.waitForFunction(()=>test.state.batchExecutes.length===1);
+        await partialPage.getByText(/Some nodes submitted/).waitFor({timeout:3000});
+        await partialPage.getByText('Node gas balance is below the reviewed maximum cost.',{exact:true}).waitFor();
+        await partialPage.evaluate(()=>test.confirmFirst());
+        await partialPage.getByRole('button',{name:'Refresh all transactions & nodes',exact:true}).click();
+        await partialPage.getByLabel('All-node submission results').getByText('Node 1 · confirmed',{exact:true}).waitFor();
+        await partialPage.waitForTimeout(100);
+        assert.equal(await partialPage.getByText(/Some nodes submitted/).count(),1,'Terminal receipt refresh retains the partial-batch headline');
+        assert.equal(await partialPage.getByText('Node gas balance is below the reviewed maximum cost.',{exact:true}).count(),1,'Terminal receipt refresh retains the failed node reason');
+        assert.equal(await partialPage.getByText('Stopped after a node could not be submitted.',{exact:true}).count(),3,'Terminal receipt refresh retains every unsent node reason');
+        assert.deepEqual(await partialPage.evaluate(()=>test.state.batchExecutes),[scenario==='partial'?'buy':'sell'],'Receipt refresh never replays the partial batch');
+        if(scenario==='partial-approval')await partialPage.getByText(/Approval confirmed/).waitFor();
+        await partialPage.close();
+      } catch(error) { repairFailures.push(scenario+': '+error.message); }
+    }
+    try {
+      const replacedBatchPage=await context.newPage();replacedBatchPage.on('pageerror',error=>errors.push(error.message));
+      await replacedBatchPage.goto('http://localhost:41924/?scenario=batch-replaced');
+      await replacedBatchPage.getByRole('button',{name:'Buy Max All Nodes',exact:true}).waitFor();
+      await replacedBatchPage.getByRole('button',{name:'Buy Max All Nodes',exact:true}).click();
+      await replacedBatchPage.getByText(/Some nodes submitted/).waitFor();
+      await replacedBatchPage.evaluate(()=>{test.replaceCurrentBeforeRefresh();test.focus();});
+      await replacedBatchPage.getByText('Trade confirmed on Robinhood Chain',{exact:true}).waitFor({timeout:3000});
+      const recordedBatch=replacedBatchPage.getByLabel('All-node submission results');
+      assert.equal(await recordedBatch.getByText(/Node 1.*pending/).count(),1,'A newer stored hash cannot replace the submitted hash in an earlier batch result');
+      assert.ok((await recordedBatch.textContent()).includes('0x'+String(10).padStart(64,'0')),'The earlier batch keeps its submitted transaction hash');
+      assert.equal((await recordedBatch.textContent()).includes('0x'+String(80).padStart(64,'0')),false,'The newer operation remains separate from the earlier batch result');
+      assert.equal(await replacedBatchPage.getByText(/Some nodes submitted/).count(),1,'Adopting a newer operation retains the partial-batch headline');
+      assert.deepEqual(await replacedBatchPage.evaluate(()=>test.state.batchExecutes),['buy'],'Stored-operation reconciliation never replays a partial batch');
+      await replacedBatchPage.close();
+    } catch(error) { repairFailures.push('replacement batch identity: '+error.message); }
+    assert.deepEqual(repairFailures,[]);
     assert.deepEqual(errors,[]);
     await context.close();
   } finally {

@@ -26,6 +26,7 @@ const snapshotReads = new Map<string, Promise<NodeTradingSnapshot>>();
 type Action = "idle" | "loading" | "preparing" | "executing" | "refreshing";
 type SubmissionOutcome = { label: string; error: string };
 type RefreshProgress = { checked: number; total: number; failures: number };
+type OperationIdentity = Pick<NodeTradeOperation, "nodeAddress" | "txHash" | "tokenAddress" | "status">;
 
 function submissionOutcome(operation: NodeTradeOperation): SubmissionOutcome {
   if (operation.status === "pending") return { label: "Submitted · awaiting confirmation", error: "" };
@@ -88,11 +89,27 @@ function operationLabel(operation: NodeTradeOperation) {
 
 function refreshedBatchOutcome(results: readonly NodeTradeBatchResult[]): SubmissionOutcome {
   const operations = results.flatMap((result) => result.operation ? [result.operation] : []);
+  const unsent = results.filter((result) => result.status === "error" || result.status === "not-submitted");
   const unknown = operations.find((operation) => operation.status === "unknown");
-  if (unknown) return { label: "Outcome unknown", error: unknown.message };
   const failed = operations.find((operation) => operation.status === "failed");
+  const pending = operations.some((operation) => operation.status === "pending");
+  if (unsent.length) {
+    const reason = unsent.find((result) => result.error)?.error || "Check each node's result below.";
+    const receiptState = unknown ? ` One submitted transaction has an unknown outcome. ${unknown.message}`
+      : failed ? ` One submitted transaction failed. ${failed.message}`
+      : pending ? " Submitted transactions are still awaiting confirmation."
+      : operations.length ? operations.every((operation) => operation.action.startsWith("approve"))
+        ? " Submitted approvals are confirmed; choose Sell Max All Nodes again for the remaining nodes."
+        : " Submitted transactions are confirmed."
+      : "";
+    return {
+      label: operations.length ? "Some nodes submitted · others not submitted" : "Could not submit",
+      error: `${unsent.length} node${unsent.length === 1 ? " was" : "s were"} not submitted. ${reason}${receiptState}`,
+    };
+  }
+  if (unknown) return { label: "Outcome unknown", error: unknown.message };
   if (failed) return { label: "Transaction failed", error: failed.message };
-  if (operations.some((operation) => operation.status === "pending")) return { label: "Submitted · awaiting confirmation", error: "" };
+  if (pending) return { label: "Submitted · awaiting confirmation", error: "" };
   if (operations.length && operations.every((operation) => operation.status === "confirmed")) {
     return operations.every((operation) => operation.action.startsWith("approve"))
       ? { label: "Approvals confirmed · choose Sell Max All Nodes again", error: "" }
@@ -196,6 +213,42 @@ export default function NodeTrading({ accountReadiness = false, session, launche
 
   const sessionKey = session ? `${session.id}:${session.addresses.join("|")}` : "none";
 
+  const reconcileRefreshedOperation = useCallback((previous: OperationIdentity, returned: NodeTradeOperation) => {
+    const key = previous.nodeAddress.toLowerCase();
+    let stored: NodeTradeOperation | null;
+    try { stored = getNodeTradeOperation(previous.nodeAddress); } catch { return null; }
+    const displayed = operationsRef.current[key];
+    if (!stored || stored.nodeAddress.toLowerCase() !== key || displayed?.txHash !== previous.txHash || displayed.status !== previous.status) return null;
+    const replaced = stored.txHash !== previous.txHash;
+    if (!replaced && (
+      returned.txHash !== previous.txHash || returned.nodeAddress.toLowerCase() !== key || returned.tokenAddress.toLowerCase() !== previous.tokenAddress.toLowerCase()
+      || stored.status !== returned.status || stored.tokenAddress.toLowerCase() !== previous.tokenAddress.toLowerCase()
+      || stored.action !== returned.action || stored.side !== returned.side
+    )) return null;
+    const next = stored;
+    operationsRef.current = { ...operationsRef.current, [key]: next };
+    setOperations((existing) => existing[key]?.txHash === previous.txHash && existing[key]?.status === previous.status ? { ...existing, [key]: next } : existing);
+    if (!replaced) {
+      const existingResults = batchResultsRef.current;
+      const updatedResults = existingResults.map((result) => result.nodeAddress.toLowerCase() === key && result.operation?.txHash === previous.txHash ? { ...result, operation: next } : result);
+      if (updatedResults.some((result, index) => result.operation !== existingResults[index]?.operation)) {
+        batchResultsRef.current = updatedResults;
+        setBatchResults(updatedResults);
+        setBatchOutcome(refreshedBatchOutcome(updatedResults));
+      }
+      const currentReview = tradeReviewStateRef.current;
+      if (currentReview?.nodeAddress.toLowerCase() === key && currentReview.tokenAddress.toLowerCase() === next.tokenAddress.toLowerCase() && currentReview.action === next.action) setTradeOutcome(submissionOutcome(next));
+    }
+    if ((previous.status === "pending" || previous.status === "unknown") && (next.status === "confirmed" || next.status === "failed")) {
+      holdingsRefreshVersionRef.current += 1;
+      holdingsRefreshAttemptsRef.current = 0;
+      setHoldingsRefreshPending(true);
+    } else if (replaced && (next.status === "pending" || next.status === "unknown") && refreshPromiseRef.current) {
+      refreshQueuedRef.current = true;
+    }
+    return next;
+  }, []);
+
   function readOperations(current: NodeSession) {
     const next: Record<string, NodeTradeOperation> = {};
     const blocked: Record<string, string> = {};
@@ -250,34 +303,8 @@ export default function NodeTrading({ accountReadiness = false, session, launche
     let nodeBalancesRequested = false;
     let tokenHoldingsRefreshed = false;
     const publish = (target: typeof unresolved[number], operation: NodeTradeOperation) => {
-      if (!sessionCurrent() || operation.txHash !== target.txHash || operation.nodeAddress.toLowerCase() !== target.address.toLowerCase() || operation.tokenAddress.toLowerCase() !== target.tokenAddress.toLowerCase()) return;
-      let stored: NodeTradeOperation | null;
-      try { stored = getNodeTradeOperation(target.address); } catch { return; }
-      const key = target.address.toLowerCase();
-      const displayed = operationsRef.current[key];
-      if (!stored || stored.nodeAddress.toLowerCase() !== key || displayed?.txHash !== target.txHash || displayed.status !== target.previousStatus) return;
-      if (stored.txHash !== target.txHash) {
-        operationsRef.current = { ...operationsRef.current, [key]: stored };
-        setOperations((existing) => existing[key]?.txHash === target.txHash ? { ...existing, [key]: stored! } : existing);
-        return;
-      }
-      if (stored.status !== operation.status || stored.tokenAddress.toLowerCase() !== target.tokenAddress.toLowerCase()) return;
-      operationsRef.current = { ...operationsRef.current, [key]: operation };
-      setOperations((existing) => existing[key]?.txHash === target.txHash ? { ...existing, [key]: operation } : existing);
-      const existingResults = batchResultsRef.current;
-      const updatedResults = existingResults.map((result) => result.nodeAddress.toLowerCase() === key && result.operation?.txHash === target.txHash ? { ...result, operation } : result);
-      if (updatedResults.some((result, index) => result.operation !== existingResults[index]?.operation)) {
-        batchResultsRef.current = updatedResults;
-        setBatchResults(updatedResults);
-        setBatchOutcome(refreshedBatchOutcome(updatedResults));
-      }
-      const currentReview = tradeReviewStateRef.current;
-      if (currentReview?.nodeAddress.toLowerCase() === key && currentReview.tokenAddress.toLowerCase() === operation.tokenAddress.toLowerCase() && currentReview.action === operation.action) setTradeOutcome(submissionOutcome(operation));
-      if ((target.previousStatus === "pending" || target.previousStatus === "unknown") && (operation.status === "confirmed" || operation.status === "failed")) {
-        holdingsRefreshVersionRef.current += 1;
-        holdingsRefreshAttemptsRef.current = 0;
-        setHoldingsRefreshPending(true);
-      }
+      if (!sessionCurrent()) return;
+      reconcileRefreshedOperation({ nodeAddress: target.address, txHash: target.txHash, tokenAddress: target.tokenAddress, status: target.previousStatus }, operation);
     };
     const promise = (async () => {
       setRefreshingAll(true);
@@ -338,9 +365,8 @@ export default function NodeTrading({ accountReadiness = false, session, launche
         onNodeBalancesRefresh?.();
         nodeBalancesRequested = true;
       }
-      if (sessionCurrent()) setRefreshNotice(failures.length
-        ? `Refresh incomplete · ${failures.length} check${failures.length === 1 ? "" : "s"} failed. ${failures[0]} Pending or unknown nodes remain blocked.`
-        : manualHandledHere ? tokenHoldingsRefreshed ? "Transactions and node holdings refreshed." : "Transactions checked and node balance refresh requested." : "");
+      if (sessionCurrent() && failures.length) setRefreshNotice(`Refresh incomplete · ${failures.length} check${failures.length === 1 ? "" : "s"} failed. ${failures[0]} Pending or unknown nodes remain blocked.`);
+      else if (sessionCurrent() && manualHandledHere) setRefreshNotice(tokenHoldingsRefreshed ? "Transactions and node holdings refreshed." : "Transactions checked and node balance refresh requested.");
     })().finally(() => {
       if (refreshPromiseRef.current === promise) {
         const runAgain = refreshQueuedRef.current;
@@ -359,7 +385,7 @@ export default function NodeTrading({ accountReadiness = false, session, launche
     });
     refreshPromiseRef.current = promise;
     return promise;
-  }, [session, snapshot, onNodeBalancesRefresh]);
+  }, [session, snapshot, onNodeBalancesRefresh, reconcileRefreshedOperation]);
 
   async function loadSnapshot(token: string, current: NodeSession, generation: number) {
     actionRef.current = "loading";
@@ -629,12 +655,7 @@ export default function NodeTrading({ accountReadiness = false, session, launche
         });
         batchResultsRef.current = mergedResults;
         setBatchResults(mergedResults);
-        const uncertain = mergedResults.find((result) => result.status === "unknown" || result.operation?.status === "unknown");
-        const notSubmitted = mergedResults.find((result) => result.status === "error" || result.status === "not-submitted");
-        const submitted = mergedResults.some((result) => result.status === "submitted");
-        setBatchOutcome(uncertain ? { label: "Outcome unknown", error: uncertain.error || uncertain.operation?.message || "Check the recorded transaction hash before another action." }
-          : notSubmitted ? { label: submitted ? "Some nodes submitted · others not submitted" : "Could not submit", error: notSubmitted.error || "Check each node's result below." }
-          : refreshedBatchOutcome(mergedResults));
+        setBatchOutcome(refreshedBatchOutcome(mergedResults));
       }
     } catch (caught) {
       if (generation === generationRef.current && selectionRef.current.session === currentSession && selectionRef.current.launchedTokenAddress === currentLaunch) {
@@ -663,22 +684,7 @@ export default function NodeTrading({ accountReadiness = false, session, launche
       if (!previous) throw new Error("No recorded trade exists for this node.");
       const operation = await beforeDeadline(() => statusRead(address, previous.txHash), Date.now() + STATUS_REFRESH_DEADLINE_MS, "Transaction status refresh timed out.");
       if (generation !== generationRef.current) return;
-      if (previous && operation.txHash !== previous.txHash) return;
-      setOperations((current) => ({ ...current, [address.toLowerCase()]: operation }));
-      const existingResults = batchResultsRef.current;
-      const updatedResults = existingResults.map((result) => result.nodeAddress.toLowerCase() === address.toLowerCase() && result.operation?.txHash === operation.txHash ? { ...result, operation } : result);
-      if (updatedResults.some((result, index) => result.operation !== existingResults[index]?.operation)) {
-        batchResultsRef.current = updatedResults;
-        setBatchResults(updatedResults);
-        setBatchOutcome(refreshedBatchOutcome(updatedResults));
-      }
-      const currentReview = tradeReviewStateRef.current;
-      if (currentReview?.nodeAddress.toLowerCase() === address.toLowerCase() && currentReview.tokenAddress.toLowerCase() === operation.tokenAddress.toLowerCase() && currentReview.action === operation.action) setTradeOutcome(submissionOutcome(operation));
-      if (previous && (previous.status === "pending" || previous.status === "unknown") && (operation.status === "confirmed" || operation.status === "failed")) {
-        holdingsRefreshVersionRef.current += 1;
-        holdingsRefreshAttemptsRef.current = 0;
-        setHoldingsRefreshPending(true);
-      }
+      reconcileRefreshedOperation(previous, operation);
     } catch (caught) {
       if (generation === generationRef.current) setError(safeMessage(caught));
     } finally {
