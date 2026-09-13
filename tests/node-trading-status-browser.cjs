@@ -21,7 +21,7 @@ const React=reactRequire('react'),ReactDOM=reactRequire('react-dom/client');
 const jsx=(type,props,key)=>React.createElement(type,{...props,key}),runtime={jsx,jsxs:jsx,Fragment:React.Fragment};
 const TOKEN='0x2222222222222222222222222222222222222222',PREVIOUS_TOKEN='0x3333333333333333333333333333333333333333',nodes=Object.freeze(Array.from({length:5},(_,index)=>'0x'+String(index+1).padStart(40,'0'))),session=Object.freeze({id:'status-fixture',addresses:nodes,backupVerified:true});
 const scenario=new URLSearchParams(location.search).get('scenario')||'main';
-const state={scenario,refreshCalls:0,refreshByNode:{},refreshByHash:{},refreshActiveByHash:{},refreshMaxByHash:{},activeRefreshes:0,maxRefreshes:0,snapshotCalls:0,snapshotFailures:0,nodeBalanceCallbacks:0,batchPrepares:[],batchExecutes:[],singleExecutes:0,batchProgress:0,holdBatch:false,hangReads:false,hungResolvers:[],confirmed:false,confirmedNodes:new Set(),confirmPrevious:false,slowNode:nodes[0],failNode:'',failNodeCount:0,operations:{}};
+const state={scenario,refreshCalls:0,refreshByNode:{},refreshByHash:{},refreshActiveByHash:{},refreshMaxByHash:{},activeRefreshes:0,maxRefreshes:0,snapshotCalls:0,snapshotFailures:0,nodeBalanceCallbacks:0,batchPrepares:[],batchExecutes:[],singleExecutes:0,batchProgress:0,holdBatch:false,hangReads:scenario==='coalescing',hungResolvers:[],confirmed:false,confirmedNodes:new Set(),confirmPrevious:false,slowNode:nodes[0],failNode:'',failNodeCount:0,operations:{}};
 function operation(node,side,status='pending',tokenAddress=TOKEN,hashOffset=10,action=side){return {nodeAddress:node,nodeIndex:nodes.indexOf(node),tokenAddress,action,side,status,txHash:'0x'+String(nodes.indexOf(node)+hashOffset).padStart(64,'0'),message:status==='confirmed'?'Trade confirmed on Robinhood Chain. Refresh holdings for the latest balances.':'Waiting for two Robinhood confirmations. Do not resubmit.'};}
 function review(node,index,side){const now=Date.now();return {requestId:side+'-'+index,nodeAddress:node,nodeIndex:index,tokenAddress:TOKEN,side,percent:100,customAmount:null,decimals:18,symbol:'TEST',action:side,route:'PONS curve',amountInRaw:'1000000000000000000',expectedOutputRaw:'1000000000000000000',minimumOutputRaw:'980000000000000000',minimumIsRateBound:false,slippageBps:200,maxGasCostWei:'100000000000000',maxTotalEthWei:'100000000000000',balanceAfterMaxCostWei:'999900000000000000',requiredRemainingEthWei:'100000000000000',gasReserveWei:'100000000000000',expectedSpendWei:'0',expectedRefundWei:'0',gasLimit:'100000',maxFeePerGasWei:'1000000000',maxPriorityFeePerGasWei:'100000000',expiresAt:now+30000,createdAt:now};}
 if(!['partial','partial-approval','batch-replaced','single-review-hash'].includes(scenario))state.operations[nodes[0].toLowerCase()]=operation(nodes[0],'sell','pending',PREVIOUS_TOKEN,50);
@@ -55,7 +55,7 @@ const html = '<!doctype html><style>body{margin:0}.spacer{height:700px}</style><
     await context.route('**/*', route => route.request().isNavigationRequest() ? (navigations.push(route.request().url()), route.fulfill({ status: 200, contentType: 'text/html', body: html })) : route.abort());
     const page = await context.newPage();
     page.on('pageerror', error => errors.push(error.message));
-    await page.goto('http://localhost:41924/');
+    await page.goto('http://localhost:41924/?scenario=coalescing');
     await page.getByRole('button', { name: 'Buy Max All Nodes', exact: true }).waitFor();
     await page.evaluate(()=>window.setAccountReadiness(false));
     assert.equal(await page.getByRole('button',{name:'Buy Max All Nodes',exact:true}).isDisabled(),true);
@@ -68,6 +68,12 @@ const html = '<!doctype html><style>body{margin:0}.spacer{height:700px}</style><
     await page.waitForFunction(() => test.state.activeRefreshes === 1);
     await page.evaluate(() => { test.replacePrevious(); test.confirmPrevious(); test.focus(); test.visible(); });
     await page.getByRole('button', { name: /Refresh all/ }).click();
+    // Keep the old response unresolved throughout the event burst so polling
+    // cannot finish and start another legitimate check before this assertion.
+    const heldReads = await page.evaluate(() => test.state);
+    assert.equal(heldReads.refreshByHash['0x'+String(50).padStart(64,'0')], 1, 'Focus, visibility and manual refresh join the held old-hash check');
+    assert.equal(heldReads.refreshActiveByHash['0x'+String(50).padStart(64,'0')], 1, 'The old-hash response remains held until the fixture releases it');
+    await page.evaluate(() => { test.normalSpeed(); test.releaseHungReads(); });
     await page.getByText('Transactions checked and node balance refresh requested.', { exact: true }).waitFor();
     await page.waitForFunction(value => test.state.nodeBalanceCallbacks > value, beforeNoSnapshotManual);
     assert.equal(await page.getByRole('button', { name: /Refresh all/ }).count(), 1, 'Manual transaction and node refresh remains available without token holdings');
