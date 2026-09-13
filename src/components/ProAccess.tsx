@@ -101,6 +101,13 @@ export default function ProAccess({ onAccessChange, onSessionIdentityChange, onA
         if (!current()) return;
         if (pendingAuthIds().length) { revokeAccess(); setUnresolvedAuth(true); return; }
         if (!validAccountStatus(result)) throw new AccountRequestError('Account status could not be validated. Sign in again.', false);
+        const previous = lastVerified.current;
+        if (result.signedIn && previous?.signedIn && result.sessionIdentity === previous.sessionIdentity && !result.pro && (result.subscriptionUnavailable || result.holder.unavailable)) {
+          // Retain only this owner's display state. Suspension invalidates existing financial actions.
+          pauseAccess();
+          setMessage('Account access could not be checked because an entitlement service is unavailable. Your loaded wallets are retained, and financial actions are paused. Retry account verification.');
+          return;
+        }
         if (result.signInAvailable !== true) { setSent(false); setCode(''); }
         // Update the financial guard before React can render account availability.
         setNodeAccountAccess(result.sessionIdentity, result.pro, true);

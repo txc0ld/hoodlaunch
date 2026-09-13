@@ -32,7 +32,7 @@ const nativeTimeout=AbortSignal.timeout.bind(AbortSignal);AbortSignal.timeout=mi
 const IDENTITY='a'.repeat(64),NODE1='0x1111111111111111111111111111111111111111',NODE2='0x2222222222222222222222222222222222222222',TOKEN='0x3333333333333333333333333333333333333333';
 const session=Object.freeze({id:'verified-fixture',addresses:Object.freeze([NODE1,NODE2]),backupVerified:true});
 const access={sessionIdentity:IDENTITY,configured:true,signInAvailable:true,walletSignInAvailable:true,signedIn:true,pro:true,billing:true,billingAccount:false,billingAccountUnavailable:false,subscription:true,subscriptionUnavailable:false,holder:{address:null,verified:false,eligible:false,granted:false,balance:null,unavailable:false}};
-const state={statusCalls:0,statusMode:'active',transientFailures:0,broadcasts:[],runs:0,stopped:0,forgetCalls:0,focusEvents:0,visibilityEvents:0,pagehideEvents:0,managerMounts:0,tradingMounts:0,accessChanges:[],identityChanges:[]};
+const state={statusCalls:0,statusMode:window.fixtureInitialMode||'active',transientFailures:0,broadcasts:[],runs:0,stopped:0,forgetCalls:0,focusEvents:0,visibilityEvents:0,pagehideEvents:0,managerMounts:0,tradingMounts:0,accessChanges:[],identityChanges:[]};
 window.fetch=async(url,options)=>{
  const body=JSON.parse(options.body);if(url!=='/api/account')throw Error('Unexpected fixture request');
  if(body.action==='request-code'){state.requestCodeCalls=(state.requestCodeCalls||0)+1;return new Response(JSON.stringify({sent:true}),{status:200});}
@@ -51,6 +51,7 @@ window.fetch=async(url,options)=>{
  if(state.statusMode==='timeout')return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true}));
  if(state.statusMode==='signed-out')return new Response(JSON.stringify({...access,signedIn:false,pro:false,sessionIdentity:null}),{status:200});
  if(state.statusMode==='revoked')return new Response(JSON.stringify({...access,pro:false,subscription:false}),{status:200});
+ if(state.statusMode.includes('dependency'))return new Response(JSON.stringify({...access,pro:false,subscription:false,subscriptionUnavailable:state.statusMode.includes('subscription'),holder:{...access.holder,unavailable:state.statusMode.includes('holder')},...(state.statusMode.includes('other-owner')?{sessionIdentity:'b'.repeat(64)}:{}),...(state.statusMode.includes('signed-out')?{signedIn:false,sessionIdentity:null}:{}),...(state.statusMode.includes('invalid')?{billing:null}:{})}),{status:200});
  if(state.statusMode==='other-owner')return new Response(JSON.stringify({...access,sessionIdentity:'b'.repeat(64)}),{status:200});
  if(state.transientFailures>0){state.transientFailures--;return new Response(state.transientBody==='empty'?'':state.transientBody==='html'?'<html>Unavailable</html>':JSON.stringify({error:'Temporary status outage'}),{status:503,headers:{'Content-Type':'application/json'}});}
  if(state.statusMode==='held')return new Promise(resolve=>{window.releaseHeldStatus=()=>resolve(new Response(JSON.stringify(access),{status:200,headers:{'Content-Type':'application/json'}}));});
@@ -135,12 +136,45 @@ async function scenario(browser, name, check) {
 (async () => {
   const browser = await chromium.launch({ headless: true, ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}) });
   try {
-    async function freshPage(check) {
+    async function freshPage(check, initialMode='active') {
       const context=await browser.newContext();
       await context.route('**/*',route=>route.request().isNavigationRequest()?route.fulfill({status:200,contentType:'text/html',body:html}):route.abort());
       const page=await context.newPage();page.setDefaultTimeout(5000);const errors=[];page.on('pageerror',e=>errors.push(e.message));
-      await page.goto('http://localhost:41923/');await page.getByText(/Pro active/).waitFor();
+      await page.addInitScript(mode=>{window.fixtureInitialMode=mode;},initialMode);
+      await page.goto('http://localhost:41923/');await page.getByText(initialMode==='active'?/Pro active/:'Free account',{exact:initialMode!=='active'}).waitFor();
       try { await check(page);assert.deepEqual(errors,[]); } finally { await context.close(); }
+    }
+    for(const dependency of ['subscription','holder']) {
+      await freshPage(async page=>{
+        await page.evaluate(()=>{void test.run();});await page.waitForFunction(()=>test.state.broadcasts.length===1);
+        const before=await page.evaluate(()=>({epoch:test.state.accountEpoch,accessChanges:test.state.accessChanges.length,identityChanges:test.state.identityChanges.length}));
+        await page.evaluate(dependency=>{test.state.statusMode=dependency+'-dependency';window.dispatchEvent(new Event('focus'));},dependency);
+        await page.waitForFunction(()=>test.state.statusCalls===2);await page.waitForTimeout(30);
+        const paused=await page.evaluate(()=>({...test.state}));console.log('ENTITLEMENT_DEPENDENCY '+dependency+' '+JSON.stringify(paused));
+        assert.equal(paused.forgetCalls,0,'An indeterminate same-owner entitlement must retain the loaded wallet');
+        assert.equal(paused.accountReady,false);assert.equal(paused.accountEpoch,before.epoch+1);
+        assert.equal(paused.accessChanges.length,before.accessChanges);assert.equal(paused.identityChanges.length,before.identityChanges);
+        await page.getByText('Account verification paused',{exact:true}).waitFor();
+        await page.getByText(/Account access could not be checked/).waitFor();
+        await page.evaluate(()=>{test.state.statusMode='active';});await page.getByRole('button',{name:'Retry account verification',exact:true}).click();
+        await page.getByText(/Pro active/).waitFor();assert.equal(await page.evaluate(()=>test.state.accountReady),true);
+        await page.evaluate(()=>test.releaseWrite());await page.waitForFunction(()=>test.state.stopped===1);
+        assert.deepEqual(await page.evaluate(()=>test.state.broadcasts),['node-1'],'Recovery must not revive an interrupted batch');
+        await page.evaluate(()=>{void test.run();});await page.waitForFunction(()=>test.state.broadcasts.length===2);
+        await page.evaluate(()=>test.releaseWrite());await page.waitForFunction(()=>test.state.broadcasts.length===3);
+        assert.equal(await page.evaluate(()=>test.state.forgetCalls),0);
+        await page.evaluate(dependency=>{test.state.statusMode=dependency+'-dependency';window.dispatchEvent(new Event('focus'));},dependency);
+        await page.getByText('Account verification paused',{exact:true}).waitFor();
+        await page.evaluate(()=>{test.state.statusMode='revoked';});await page.getByRole('button',{name:'Retry account verification',exact:true}).click();
+        await page.getByText('Free account',{exact:true}).waitFor();
+        assert.equal(await page.evaluate(()=>test.state.forgetCalls),1,'A definitive entitlement loss after a pause still forgets the wallet');
+        assert.equal(await page.evaluate(()=>test.state.accountReady),false);
+      });
+      await freshPage(async page=>{
+        assert.equal(await page.evaluate(()=>test.state.accountReady),false,'An unavailable result cannot grant initial signing access');
+        assert.equal(await page.evaluate(()=>test.state.accessChanges.includes(true)),false);
+        assert.equal(await page.evaluate(()=>typeof window.runFixtureBatch),'undefined');
+      },dependency+'-dependency');
     }
     for(const mode of ['throttled','timeout','body-deadline','deadline']) await freshPage(async page=>{
       await page.evaluate(mode=>{test.state.statusMode=mode;window.dispatchEvent(new Event('focus'));},mode);
@@ -159,7 +193,7 @@ async function scenario(browser, name, check) {
       await page.getByRole('button',{name:'Sign out & lock wallets',exact:true}).click();await page.getByText('Account services are unavailable.',{exact:true}).waitFor();
       assert.equal(await page.evaluate(()=>test.state.logoutCalls),1);assert.equal(await page.evaluate(()=>test.state.forgetCalls),1);
     });
-    for(const mode of ['unauthorized','malformed','invalid-shape','signed-out','revoked','other-owner']) await freshPage(async page=>{
+    for(const mode of ['unauthorized','malformed','invalid-shape','signed-out','revoked','other-owner','subscription-dependency-other-owner','holder-dependency-signed-out','subscription-dependency-invalid']) await freshPage(async page=>{
       await page.evaluate(mode=>{test.state.statusMode=mode;window.dispatchEvent(new Event('focus'));},mode);
       await page.waitForFunction(()=>test.state.forgetCalls===1);
       assert.equal(await page.evaluate(()=>test.state.statusCalls),2);
