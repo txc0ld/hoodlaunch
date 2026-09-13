@@ -6,7 +6,7 @@ Base 55ba8786895428e5579ffde889564c48cefd1f13 is prior shipped Hoodlabs release;
 
 ## Ownership and risk
 
-R3 financial changes: designated critical_builder Astra High owns node-trading.ts, node-trade-batch.ts, pons-trade.ts and focused tests in /home/tx/projects/hoodlabs-max-trades. Root Astra High owns design/contracts/integration. R2 read lifecycle/UI: complex_builder Sol High owns NodeTrading.tsx/CSS, NodeManager.tsx and PonsLaunchpad.tsx only for refresh bridge plus focused tests in /home/tx/projects/hoodlabs-wallet-status-ui. Independent verification_engineer Sol High in /home/tx/projects/hoodlabs-wallet-stability-verify; fresh Astra High final source review required. No worker spawning or production actions. One writer per worktree. Native bindings specified; effective runtime and usage telemetry UNKNOWN.
+R3 financial changes: designated critical_builder Astra High owns node-trading.ts, node-trade-batch.ts, pons-trade.ts and focused tests in /home/tx/projects/hoodlabs-max-trades. Root Astra High owns design/contracts/integration and the small guide copy update describing automatic refresh, manual recovery and retained gas. R2 read lifecycle/UI: complex_builder Sol High owns NodeTrading.tsx/CSS, NodeManager.tsx and PonsLaunchpad.tsx only for refresh bridge plus focused tests in /home/tx/projects/hoodlabs-wallet-status-ui. Independent verification_engineer Sol High in /home/tx/projects/hoodlabs-wallet-stability-verify; fresh Astra High final source review required. No worker spawning or production actions. One writer per worktree. Native bindings specified; effective runtime and usage telemetry UNKNOWN.
 
 ## Reproductions and design preflight
 
