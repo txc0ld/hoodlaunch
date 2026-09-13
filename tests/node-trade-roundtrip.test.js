@@ -111,7 +111,7 @@ async function loopbackRpc({ delayMs = 5, chainId = '0x1237', phase = 0, sellGas
     'event CurveBuy(address indexed buyer,address indexed recipient,uint256 quoteIn,uint256 tokensOut,uint256 fee,uint256 tax)',
     'event CurveSell(address indexed seller,address indexed recipient,uint256 tokensIn,uint256 quoteOut,uint256 fee,uint256 tax)'
   ]);
-  const gasFor = tx => tx.data.startsWith(tokenInterface.getSighash('approve')) || tx.data.startsWith(permitInterface.getSighash('approve')) ? 50000 : tx.data.startsWith(tradeInterface.getSighash('sell')) || (tx.data.startsWith(universalInterface.getSighash('execute')) && !v4Swap(tx)[1]) ? sellGas : 100000;
+  const gasFor = tx => tx.data.startsWith(tokenInterface.getSighash('approve')) || tx.data.startsWith(permitInterface.getSighash('approve')) ? (state.approvalGas || 50000) : tx.data.startsWith(tradeInterface.getSighash('sell')) || (tx.data.startsWith(universalInterface.getSighash('execute')) && !v4Swap(tx)[1]) ? sellGas : 100000;
   let rejectedMethod = '';
   let onRequest = () => {};
   const block = {
@@ -236,7 +236,7 @@ async function loopbackRpc({ delayMs = 5, chainId = '0x1237', phase = 0, sellGas
     url: `http://127.0.0.1:${address.port}`,
     setChainId: value => { currentChainId = value; },
     setChainIdResponses: values => { chainIdResponses = [...values]; },
-    setNonces: (pending, latest) => { pendingNonce = pending; latestNonce = latest; },
+    setNonces: (pending, latest) => { pendingNonce = pending; latestNonce = latest; accountNonces.set(wallet.address.toLowerCase(), pending); },
     setCurveTokenReserve: value => { state.tokenReserve = value; },
     rejectMethod: method => { rejectedMethod = method; },
     setOnRequest: callback => { onRequest = callback; },
@@ -462,12 +462,88 @@ test('previously stranded wallets receive an actionable gas error and never subm
   assert.equal(batch.entries[0].status, 'blocked'); assert.match(batch.entries[0].error, /Robinhood ETH.*gas.*Fund the node.*refresh/);
   assert.equal(h.rpc.state.transactions.size, 1);
 });
-test('fee movement above a Max review cap fails before signing', async t => {
+test('base plus full reviewed tip above a Max review cap fails before signing', async t => {
   const rpc = await loopbackRpc({ delayMs: 0 }); t.after(() => rpc.close()); const h = actualProviderTrading(rpc.url);
   const review = await h.trading.prepareTrade(h.session, 0, wallet.address, TOKEN, 'buy', 100, () => {});
-  rpc.state.feeBase = ethers.utils.parseUnits('2', 'gwei').toHexString(); let signs = 0;
-  await assert.rejects(h.trading.executeTrade(h.session, review, () => {}, async () => { signs++; throw Error('unexpected signer'); }), /Balance, gas or nonce changed/);
+  rpc.state.feeBase = ethers.utils.parseUnits('2', 'gwei').add(1).toHexString(); let signs = 0;
+  await assert.rejects(h.trading.executeTrade(h.session, review, () => {}, async () => { signs++; throw Error('unexpected signer'); }), /base fee plus the reviewed priority fee exceeds/);
   assert.equal(signs, 0); assert.equal(rpc.state.transactions.size, 0);
+});
+
+async function feeReview(t, { phase = 0, action = 'approve-token' } = {}) {
+  const rpc = await loopbackRpc({ delayMs: 0, phase }); t.after(() => rpc.close());
+  rpc.state.feeBase = ethers.BigNumber.from('85020000').toHexString();
+  rpc.state.approvalGas = 46391;
+  rpc.state.balance = action === 'approve-token' ? eth('0.000271931252512') : eth('1');
+  rpc.state.holding = eth('100');
+  if (action === 'sell' || action === 'approve-router') rpc.state.allowance = eth('100');
+  if (action === 'sell') { rpc.state.permit = eth('100'); rpc.state.permitExpiration = Math.floor(Date.now() / 1000) + 3600; }
+  const h = actualProviderTrading(rpc.url);
+  const review = await h.trading.prepareTrade(h.session, 0, wallet.address, TOKEN, action === 'buy' ? 'buy' : 'sell', action === 'buy' ? 5 : 100, () => {});
+  assert.equal(review.action, action);
+  assert.equal(review.maxFeePerGasWei, '1670040000');
+  assert.equal(review.maxPriorityFeePerGasWei, '1500000000');
+  if (action === 'approve-token') {
+    assert.equal(review.gasLimit, '60309'); assert.equal(review.maxTotalEthWei, '100718442360000');
+    assert.equal(review.balanceAfterMaxCostWei, '171212810152000');
+    assert.equal(review.requiredRemainingEthWei, eth(phase === 0 ? '0.00005' : '0.0001').toString());
+  }
+  return { ...h, rpc, review };
+}
+
+for (const [phase, actions] of [[0, ['buy', 'sell', 'approve-token']], [2, ['buy', 'sell', 'approve-token', 'approve-router']]]) {
+  for (const action of actions) test(`phase ${phase} ${action}: tiny base rise keeps exact reviewed signed fees and one broadcast`, async t => {
+    const h = await feeReview(t, { phase, action });
+    h.rpc.state.feeBase = ethers.BigNumber.from('85020001').toHexString();
+    const start = h.rpc.requests.length; let signs = 0;
+    const sign = async tx => { signs++; return wallet.signTransaction(tx); };
+    const operation = await h.trading.executeTrade(h.session, h.review, () => {}, sign);
+    assert.equal(operation.action, action); assert.equal(operation.status, 'pending');
+    assert.equal(signs, 1); assert.equal(h.rpc.state.transactions.size, 1); assert.equal(h.storage.size, 1);
+    const tx = h.rpc.state.transactions.get(operation.txHash);
+    assert.equal(tx.maxFeePerGas.toString(), h.review.maxFeePerGasWei);
+    assert.equal(tx.maxPriorityFeePerGas.toString(), h.review.maxPriorityFeePerGasWei);
+    assert.equal(tx.gasLimit.toString(), h.review.gasLimit);
+    assert.equal(tx.value.add(tx.gasLimit.mul(tx.maxFeePerGas)).toString(), h.review.maxTotalEthWei);
+    assert.equal(tx.nonce, 0); assert.equal(tx.chainId, 4663); assert.equal(tx.type, 2);
+    assert.equal(h.rpc.requests.slice(start).filter(r => r.method === 'eth_getBlockByNumber').length, 1, 'The existing fee read supplies the base; no extra block read');
+    await assert.rejects(h.trading.executeTrade(h.session, h.review, () => {}, sign), /already used/);
+    assert.equal(signs, 1);
+    assert.equal(h.rpc.requests.filter(r => r.method === 'eth_sendRawTransaction').length, 1, 'Approvals never advance into a sale');
+  });
+}
+
+for (const base of ['0', '170040000']) test(`approval accepts nonnegative base ${base} within the full original tip boundary`, async t => {
+  const h = await feeReview(t); h.rpc.state.feeBase = ethers.BigNumber.from(base).toHexString();
+  await h.trading.executeTrade(h.session, h.review, () => {}, tx => wallet.signTransaction(tx));
+  assert.equal(h.rpc.state.transactions.size, 1);
+});
+
+for (const scenario of [
+  { name: 'one wei full-tip overflow', change: h => { h.rpc.state.feeBase = ethers.BigNumber.from('170040001').toHexString(); }, error: /base fee plus the reviewed priority fee exceeds/ },
+  { name: 'missing base fee', change: h => { h.rpc.state.feeBase = null; }, error: /base fee could not be safely verified/ },
+  { name: 'balance below maximum cost plus reserve', change: h => { h.rpc.state.balance = ethers.BigNumber.from(h.review.maxTotalEthWei).add(h.review.requiredRemainingEthWei).sub(1); }, error: /insufficient ETH.*reviewed cost and gas reserve/ },
+  { name: 'both nonce views advance', change: h => h.rpc.setNonces(1, 1), error: /transaction nonce changed/ },
+  { name: 'pending nonce differs from latest', change: h => h.rpc.setNonces(1, 0), error: /already has a pending Robinhood transaction/ },
+  { name: 'estimate exceeds reviewed limit', change: h => { h.rpc.state.approvalGas = Number(h.review.gasLimit) + 1; }, error: /new gas estimate exceeds/ },
+  { name: 'token holdings fall below reviewed amount', change: h => { h.rpc.state.holding = ethers.BigNumber.from(h.review.amountInRaw).sub(1); }, error: /token balance is below the reviewed amount/ },
+]) test(`approval rejects ${scenario.name} with a specific reason before signing`, async t => {
+  const h = await feeReview(t); scenario.change(h); let signs = 0;
+  await assert.rejects(h.trading.executeTrade(h.session, h.review, () => {}, async () => { signs++; throw Error('unexpected signer'); }), scenario.error);
+  assert.equal(signs, 0); assert.equal(h.storage.size, 0);
+  assert.equal(h.rpc.requests.filter(r => r.method === 'eth_sendRawTransaction').length, 0);
+});
+
+test('approval at the fixed fee cap preserves unknown-outcome recovery without retry', async t => {
+  const h = await feeReview(t); h.rpc.state.feeBase = ethers.BigNumber.from('85020001').toHexString();
+  h.rpc.rejectMethod('eth_sendRawTransaction'); let signs = 0;
+  const sign = async tx => { signs++; return wallet.signTransaction(tx); };
+  const operation = await h.trading.executeTrade(h.session, h.review, () => {}, sign);
+  assert.equal(operation.status, 'unknown'); assert.equal(h.storage.size, 1);
+  assert.equal(h.trading.getNodeTradeOperation(wallet.address).txHash, operation.txHash);
+  await assert.rejects(h.trading.executeTrade(h.session, h.review, () => {}, sign), /already used/);
+  await assert.rejects(h.trading.prepareTrade(h.session, 0, wallet.address, TOKEN, 'sell', 100, () => {}), /unresolved Robinhood transaction/);
+  assert.equal(signs, 1); assert.equal(h.rpc.requests.filter(r => r.method === 'eth_sendRawTransaction').length, 1);
 });
 
 

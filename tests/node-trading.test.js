@@ -13,7 +13,7 @@ function harness(options={}){
   async getCode(address){calls.push(['code',address]);return options.wrongCode?'0x00':runtimes[address.toLowerCase()]||'0x1234';}
   async getBlockNumber(){return 100;}
   async getBalance(){if(options.traceBalance){state.balanceReads=(state.balanceReads||0)+1;state.balanceActive=(state.balanceActive||0)+1;state.balanceMax=Math.max(state.balanceMax||0,state.balanceActive);await new Promise(resolve=>setTimeout(resolve,0));state.balanceActive--;}return state.balanceOverride||eth(options.balance||(options.lowBalance?'0.000001':'1'));}
-  async getFeeData(){return {maxFeePerGas:bn('2000000000'),maxPriorityFeePerGas:bn('1000000000')};}
+  async getFeeData(){return {maxFeePerGas:bn('2000000000'),maxPriorityFeePerGas:bn('1000000000'),lastBaseFeePerGas:bn('500000000'),...state.feesOverride};}
   async getTransactionCount(){return state.nonce;}
   async estimateGas(tx){calls.push(['estimate',tx]);if(state.invalidateOnEstimate)state.selectionActive=false;return bn(options.estimate?options.estimate(tx,calls.filter(c=>Array.isArray(c)&&c[0]==='estimate').length):options.hugeGas?'4000000':'100000');}
   async call(tx){if(tx.maxFeePerGas!==undefined){assert.ok(tx.gasLimit,'fee-bearing calls require explicit affordable gas');assert.ok(bn(tx.value).add(bn(tx.gasLimit).mul(tx.maxFeePerGas)).lte(await this.getBalance()),'simulation must be affordable');}const abi=new ethers.utils.Interface(['function approve(address,uint256) returns (bool)']);if(tx.data.startsWith(abi.getSighash('approve')))return abi.encodeFunctionResult('approve',[!options.refuseApproval]);if(options.simulationFail)throw Error('simulation failed');return '0x';}
@@ -49,6 +49,20 @@ function harness(options={}){
 }
 const prepare=(h,side='buy',percent=5)=>h.t.prepareTrade(h,0,wallet.address,TOKEN,side,percent,h.assertActive);
 const execute=(h,r)=>h.t.executeTrade(h,r,h.assertActive,tx=>wallet.signTransaction(tx));
+for(const base of [undefined,null,'500000000',bn(-1)])test(`missing or invalid base fee ${String(base)} blocks preparation and execution`,async()=>{
+ const h=harness(),r=await prepare(h,'sell',25);h.state.feesOverride={lastBaseFeePerGas:base};let signs=0;
+ await assert.rejects(h.t.executeTrade(h,r,h.assertActive,async()=>{signs++;throw Error('unexpected signer');}),/base fee could not be safely verified/);
+ await assert.rejects(prepare(h,'sell',25),/base fee could not be safely verified/);
+ assert.equal(signs,0);assert.equal(h.mem.size,0);assert.equal(h.calls.includes('eth_sendRawTransaction'),false);
+});
+test('fresh recommendation and priority never replace the original signed fee fields',async()=>{
+ const h=harness(),r=await prepare(h,'sell',25);
+ h.state.feesOverride={maxFeePerGas:bn('2500000000'),maxPriorityFeePerGas:bn('1500000000')};
+ let signed;
+ await h.t.executeTrade(h,r,h.assertActive,async tx=>{signed=tx;return wallet.signTransaction(tx);});
+ assert.equal(signed.maxFeePerGas,r.maxFeePerGasWei);assert.equal(signed.maxPriorityFeePerGas,r.maxPriorityFeePerGasWei);
+ assert.equal(h.calls.filter(c=>c==='eth_sendRawTransaction').length,1);
+});
 test('curve integer math follows fees/input, fees/output and partial-fill price bound',()=>{
  const h=harness(),s={quoteReserve:bn(10000),tokenReserve:bn(100000),sellable:bn(90000),feeBps:bn(100),creatorTaxBps:bn(200),snipeBps:bn(0)};
  const buy=h.p.quoteCurveBuy(s,bn(1000));assert.equal(buy.output.toString(),'8842');assert.equal(buy.spent.toString(),'1000');
@@ -128,7 +142,7 @@ test('narrow vault requires recovered session and does not expose a generic sign
 test('execution rechecks the exact post-action gas reserve after balance drift for swaps and both approval routes',async()=>{
  for(const options of [{},{phase:0},{phase:2},{phase:2,allowance:eth('100').toString()}]){
  const h=harness(options),r=await prepare(h,options.phase===undefined?'buy':'sell',5);h.state.balanceOverride=bn(r.maxTotalEthWei).add(bn(r.requiredRemainingEthWei).sub(1));
- await assert.rejects(execute(h,r),/Balance, gas or nonce changed/);assert.equal(h.calls.includes('eth_sendRawTransaction'),false);
+ await assert.rejects(execute(h,r),/insufficient ETH.*reviewed cost and gas reserve/);assert.equal(h.calls.includes('eth_sendRawTransaction'),false);
  }
 });
 

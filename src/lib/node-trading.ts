@@ -61,11 +61,12 @@ function publicRecord(r:TradeRecord):NodeTradeOperation{return Object.freeze({no
 export function getNodeTradeOperation(node:string):NodeTradeOperation|null {const r=read(node);return r?publicRecord(r):null;}
 function available(node:string):void{const r=read(node);if(r&&r.status!=='confirmed'&&r.status!=='failed')throw new Error('This node has an unresolved Robinhood transaction. Check status before trading again.');}
 function validSide(side:NodeTradeSide):void{if(side!=='buy'&&side!=='sell')throw new Error('Choose Buy or Sell.');}
-async function feesAndNonce(p:providers.JsonRpcProvider,node:string):Promise<{fee:BigNumber;tip:BigNumber;nonce:number}> {
+async function feesAndNonce(p:providers.JsonRpcProvider,node:string):Promise<{fee:BigNumber;tip:BigNumber;baseFee:BigNumber;nonce:number}> {
   const [fees,pending,latest]=await Promise.all([p.getFeeData(),p.getTransactionCount(node,'pending'),p.getTransactionCount(node,'latest')]);
   if(pending!==latest)throw new Error('This node already has a pending Robinhood transaction. Wait for confirmation.');
+  if(!BigNumber.isBigNumber(fees.lastBaseFeePerGas)||fees.lastBaseFeePerGas.lt(0))throw new Error('The current Robinhood base fee could not be safely verified. Prepare a fresh trade.');
   if(!fees.maxFeePerGas||!fees.maxPriorityFeePerGas||fees.maxFeePerGas.lte(0)||fees.maxFeePerGas.gt(utils.parseUnits('100','gwei'))||fees.maxPriorityFeePerGas.gt(fees.maxFeePerGas))throw new Error('Robinhood gas cannot be safely quoted.');
-  return {fee:fees.maxFeePerGas,tip:fees.maxPriorityFeePerGas,nonce:pending};
+  return {fee:fees.maxFeePerGas,tip:fees.maxPriorityFeePerGas,baseFee:fees.lastBaseFeePerGas,nonce:pending};
 }
 async function quote(p:providers.JsonRpcProvider,launch:TradeLaunch,node:string,side:NodeTradeSide,input:BigNumber,block:number,curveState?:CurveQuoteState):Promise<{output:BigNumber;minimum:BigNumber;spent:BigNumber;refund:BigNumber}> {
   if(launch.phase===0){
@@ -220,8 +221,13 @@ export async function executeTrade(owner:object,review:NodeTradeReview,assertAct
         isSell?t.allowance(review.nodeAddress,review.phase===0?launch.curve:TRADE_PERMIT2,{blockTag:block}):Promise.resolve(null),
         isSell&&review.phase===2?new Contract(TRADE_PERMIT2,TRADE_PERMIT_ABI,p).allowance(review.nodeAddress,review.tokenAddress,TRADE_ROUTER,{blockTag:block}):Promise.resolve(null),
       ]);
-      if(balance.lt(BigNumber.from(review.maxTotalEthWei).add(review.requiredRemainingEthWei))||feeData.nonce!==cap.tx.nonce||feeData.fee.gt(review.maxFeePerGasWei)||estimate.gt(review.gasLimit)||
-        (review.side==='sell'&&holding.lt(review.amountInRaw)))throw new Error('Balance, gas or nonce changed. Prepare a fresh trade.');
+      if(balance.lt(BigNumber.from(review.maxTotalEthWei).add(review.requiredRemainingEthWei)))throw new Error('This node has insufficient ETH for the reviewed cost and gas reserve. Fund the node, refresh balances, and prepare a fresh trade.');
+      if(feeData.nonce!==cap.tx.nonce)throw new Error('This node\'s transaction nonce changed. Refresh status and prepare a fresh trade.');
+      // The new recommendation is not the cost of this immutable reviewed transaction.
+      // Require the current base fee and the full original priority fee to fit its cap.
+      if(feeData.baseFee.add(review.maxPriorityFeePerGasWei).gt(review.maxFeePerGasWei))throw new Error('The current base fee plus the reviewed priority fee exceeds this trade\'s maximum fee. Prepare a fresh trade.');
+      if(estimate.gt(review.gasLimit))throw new Error('The new gas estimate exceeds this trade\'s reviewed gas limit. Prepare a fresh trade.');
+      if(review.side==='sell'&&holding.lt(review.amountInRaw))throw new Error('This node\'s token balance is below the reviewed amount. Refresh balances and prepare a fresh trade.');
       if(review.action==='approve-token'&&tokenInterface.decodeFunctionResult('approve',simulation)[0]!==true)throw new Error('The token refused the approval.');
       if(isSwap&&q){
         const belowMinimum=review.side==='buy'&&review.phase===0 ? q.output.mul(review.amountInRaw).lt(q.spent.mul(cap.minimum)) : q.output.lt(cap.minimum);

@@ -24,7 +24,7 @@ function harness(options={}) {
     async getCode(){return this.dest?(options.wrongRouterCode?'0x00':require('./fixtures/relay-router-runtime.json').runtimeBytecode):(options.wrongSourceCode?'0x00':require('./fixtures/relay-source-runtime.json').runtimeBytecode);}
     async getBlock(number){if(this.dest){mutable.destBlockReads=(mutable.destBlockReads||0)+1;}return {number,hash:'0x'+((this.dest && (options.orphanDestination || (options.reorgDuringProof && mutable.destBlockReads>2)))?'bb':'aa').repeat(32),parentHash:'0x'+'aa'.repeat(32)};}
     async getBlockNumber(){return this.dest && options.insufficientHead ? 100 : 101;}
-    async getFeeData(){if(options.prepareDelay)mutable.now+=options.prepareDelay;return {maxFeePerGas:bn(options.highFee?'200000000000':'2000000000'),maxPriorityFeePerGas:bn('1000000000')};}
+    async getFeeData(){if(options.prepareDelay)mutable.now+=options.prepareDelay;return {maxFeePerGas:bn(options.highFee?'200000000000':'2000000000'),maxPriorityFeePerGas:bn('1000000000'),lastBaseFeePerGas:bn('500000000')};}
     async getTransactionCount(){return options.changedNonce?2:0;}
     async getTransactionReceipt(hash){
       if(this.dest){const r=JSON.parse([...memory.values()][0]);const router='0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f';

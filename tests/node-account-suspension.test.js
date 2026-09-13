@@ -13,7 +13,7 @@ function harness(options={}){
   async getCode(address){calls.push(['code',address]);return options.wrongCode?'0x00':runtimes[address.toLowerCase()]||'0x1234';}
   async getBlockNumber(){return 100;}
   async getBalance(){if(options.traceBalance){state.balanceReads=(state.balanceReads||0)+1;state.balanceActive=(state.balanceActive||0)+1;state.balanceMax=Math.max(state.balanceMax||0,state.balanceActive);await new Promise(resolve=>setTimeout(resolve,0));state.balanceActive--;}return state.balanceOverride||eth(options.balance||(options.lowBalance?'0.000001':'1'));}
-  async getFeeData(){return {maxFeePerGas:bn('2000000000'),maxPriorityFeePerGas:bn('1000000000')};}
+  async getFeeData(){return {maxFeePerGas:bn('2000000000'),maxPriorityFeePerGas:bn('1000000000'),lastBaseFeePerGas:bn('500000000')};}
   async getTransactionCount(){return state.nonce;}
   async estimateGas(tx){calls.push(['estimate',tx]);if(state.onEstimate)await state.onEstimate();if(state.invalidateOnEstimate)state.selectionActive=false;return bn(options.estimate?options.estimate(tx,calls.filter(c=>Array.isArray(c)&&c[0]==='estimate').length):options.hugeGas?'4000000':'100000');}
   async call(tx){if(tx.maxFeePerGas!==undefined){assert.ok(tx.gasLimit,'fee-bearing calls require explicit affordable gas');assert.ok(bn(tx.value).add(bn(tx.gasLimit).mul(tx.maxFeePerGas)).lte(await this.getBalance()),'simulation must be affordable');}const abi=new ethers.utils.Interface(['function approve(address,uint256) returns (bool)']);if(tx.data.startsWith(abi.getSighash('approve')))return abi.encodeFunctionResult('approve',[!options.refuseApproval]);if(options.simulationFail)throw Error('simulation failed');return '0x';}
