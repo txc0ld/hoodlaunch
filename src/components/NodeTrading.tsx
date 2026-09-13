@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BigNumber, utils } from "ethers";
 import {
   executeNodeTrade,
@@ -17,9 +17,12 @@ import type { NodeTradePercent, NodeTradeAmount, NodeTradeSide, NodeTradingSnaps
 import styles from "./NodeTrading.module.css";
 
 const PERCENTS: readonly NodeTradePercent[] = [5, 10, 25, 50, 100];
+const STATUS_REFRESH_DEADLINE_MS = 20_000;
+const HOLDINGS_REFRESH_RETRIES = 3;
 
 type Action = "idle" | "loading" | "preparing" | "executing" | "refreshing";
 type SubmissionOutcome = { label: string; error: string };
+type RefreshProgress = { checked: number; total: number; failures: number };
 
 function submissionOutcome(operation: NodeTradeOperation): SubmissionOutcome {
   if (operation.status === "pending") return { label: "Submitted · awaiting confirmation", error: "" };
@@ -80,12 +83,42 @@ function operationLabel(operation: NodeTradeOperation) {
   return "Outcome unknown · do not resubmit";
 }
 
+function refreshedBatchOutcome(results: readonly NodeTradeBatchResult[]): SubmissionOutcome {
+  const operations = results.flatMap((result) => result.operation ? [result.operation] : []);
+  const unknown = operations.find((operation) => operation.status === "unknown");
+  if (unknown) return { label: "Outcome unknown", error: unknown.message };
+  const failed = operations.find((operation) => operation.status === "failed");
+  if (failed) return { label: "Transaction failed", error: failed.message };
+  if (operations.some((operation) => operation.status === "pending")) return { label: "Submitted · awaiting confirmation", error: "" };
+  if (operations.length && operations.every((operation) => operation.status === "confirmed")) {
+    return operations.every((operation) => operation.action.startsWith("approve"))
+      ? { label: "Approvals confirmed · choose Sell Max All Nodes again", error: "" }
+      : { label: "Confirmed on Robinhood Chain", error: "" };
+  }
+  return { label: "Status refreshed", error: "" };
+}
+
+async function beforeDeadline<T>(start: () => Promise<T>, deadline: number, message: string) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error(message);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      start(),
+      new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error(message)), remaining); }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 export interface NodeTradingProps {
   session: NodeSession | null;
   launchedTokenAddress?: string;
+  onNodeBalancesRefresh?: () => void;
 }
 
-export default function NodeTrading({ session, launchedTokenAddress = "" }: NodeTradingProps) {
+export default function NodeTrading({ session, launchedTokenAddress = "", onNodeBalancesRefresh }: NodeTradingProps) {
   const [tokenInput, setTokenInput] = useState(launchedTokenAddress);
   const [customAmounts, setCustomAmounts] = useState<Record<string, string>>({});
   const [customErrors, setCustomErrors] = useState<Record<string, string>>({});
@@ -100,13 +133,30 @@ export default function NodeTrading({ session, launchedTokenAddress = "" }: Node
   const [operations, setOperations] = useState<Record<string, NodeTradeOperation>>({});
   const [blockedStorage, setBlockedStorage] = useState<Record<string, string>>({});
   const [batchActive, setBatchActive] = useState(false);
+  const [refreshingAll, setRefreshingAll] = useState(false);
+  const [refreshNotice, setRefreshNotice] = useState("");
+  const [refreshProgress, setRefreshProgress] = useState<RefreshProgress | null>(null);
+  const [holdingsRefreshPending, setHoldingsRefreshPending] = useState(false);
   const [action, setAction] = useState<Action>("idle");
   const [error, setError] = useState("");
   const generationRef = useRef(0);
   const actionRef = useRef<Action>("idle");
-  const reviewRef = useRef<HTMLDivElement | null>(null);
-  const batchReviewRef = useRef<HTMLDivElement | null>(null);
   const stopBatchRef = useRef(false);
+  const refreshPromiseRef = useRef<Promise<void> | null>(null);
+  const refreshQueuedRef = useRef(false);
+  const refreshQueuedManualRef = useRef(false);
+  const refreshTargetsRef = useRef<Set<string>>(new Set());
+  const refreshHoldingsStartedRef = useRef(false);
+  const manualRefreshRequestedRef = useRef(false);
+  const holdingsRefreshVersionRef = useRef(0);
+  const holdingsAppliedVersionRef = useRef(0);
+  const holdingsRefreshAttemptsRef = useRef(0);
+  const operationsRef = useRef(operations);
+  operationsRef.current = operations;
+  const batchResultsRef = useRef(batchResults);
+  batchResultsRef.current = batchResults;
+  const tradeReviewStateRef = useRef(review);
+  tradeReviewStateRef.current = review;
   const selectionRef = useRef({ session, launchedTokenAddress });
   selectionRef.current = { session, launchedTokenAddress };
 
@@ -126,6 +176,143 @@ export default function NodeTrading({ session, launchedTokenAddress = "" }: Node
     setOperations(next);
     setBlockedStorage(blocked);
   }
+
+  const refreshAll = useCallback((manual: boolean) => {
+    if (manual) {
+      manualRefreshRequestedRef.current = true;
+      holdingsRefreshAttemptsRef.current = 0;
+      holdingsRefreshVersionRef.current += 1;
+      setHoldingsRefreshPending(true);
+    }
+    if (refreshPromiseRef.current) {
+      const hasNewOperation = session?.addresses.some((address) => {
+        const operation = operationsRef.current[address.toLowerCase()];
+        return operation && (operation.status === "pending" || operation.status === "unknown") && !refreshTargetsRef.current.has(`${address.toLowerCase()}:${operation.txHash}`);
+      });
+      if (hasNewOperation || (manual && refreshHoldingsStartedRef.current)) refreshQueuedRef.current = true;
+      if (manual && refreshHoldingsStartedRef.current) refreshQueuedManualRef.current = true;
+      return refreshPromiseRef.current;
+    }
+    if (!session) return Promise.resolve();
+    const currentSession = session;
+    const selectedToken = snapshot?.tokenAddress || null;
+    const generation = generationRef.current;
+    const unresolved = currentSession.addresses.flatMap((address) => {
+      const operation = operationsRef.current[address.toLowerCase()];
+      return operation && (operation.status === "pending" || operation.status === "unknown")
+        ? [{ address, txHash: operation.txHash, tokenAddress: operation.tokenAddress, previousStatus: operation.status }]
+        : [];
+    });
+    const holdingsDue = holdingsAppliedVersionRef.current < holdingsRefreshVersionRef.current && holdingsRefreshAttemptsRef.current < HOLDINGS_REFRESH_RETRIES;
+    if (!unresolved.length && !manualRefreshRequestedRef.current && !holdingsDue) return Promise.resolve();
+    const current = () => generation === generationRef.current && selectionRef.current.session === currentSession;
+    const failures: string[] = [];
+    let checked = 0;
+    let holdingsPromise: Promise<void> | null = null;
+    const publish = (target: typeof unresolved[number], operation: NodeTradeOperation) => {
+      if (!current() || operation.txHash !== target.txHash || operation.nodeAddress.toLowerCase() !== target.address.toLowerCase() || operation.tokenAddress.toLowerCase() !== target.tokenAddress.toLowerCase()) return;
+      let stored: NodeTradeOperation | null;
+      try { stored = getNodeTradeOperation(target.address); } catch { return; }
+      const key = target.address.toLowerCase();
+      const displayed = operationsRef.current[key];
+      if (!stored || stored.nodeAddress.toLowerCase() !== key || displayed?.txHash !== target.txHash || displayed.status !== target.previousStatus) return;
+      if (stored.txHash !== target.txHash) {
+        operationsRef.current = { ...operationsRef.current, [key]: stored };
+        setOperations((existing) => existing[key]?.txHash === target.txHash ? { ...existing, [key]: stored! } : existing);
+        return;
+      }
+      if (stored.status !== operation.status || stored.tokenAddress.toLowerCase() !== target.tokenAddress.toLowerCase()) return;
+      operationsRef.current = { ...operationsRef.current, [key]: operation };
+      setOperations((existing) => existing[key]?.txHash === target.txHash ? { ...existing, [key]: operation } : existing);
+      const existingResults = batchResultsRef.current;
+      const updatedResults = existingResults.map((result) => result.nodeAddress.toLowerCase() === key && result.operation?.txHash === target.txHash ? { ...result, operation } : result);
+      if (updatedResults.some((result, index) => result.operation !== existingResults[index]?.operation)) {
+        batchResultsRef.current = updatedResults;
+        setBatchResults(updatedResults);
+        setBatchOutcome(refreshedBatchOutcome(updatedResults));
+      }
+      const currentReview = tradeReviewStateRef.current;
+      if (currentReview?.nodeAddress.toLowerCase() === key && currentReview.tokenAddress.toLowerCase() === operation.tokenAddress.toLowerCase() && currentReview.action === operation.action) setTradeOutcome(submissionOutcome(operation));
+      if ((target.previousStatus === "pending" || target.previousStatus === "unknown") && (operation.status === "confirmed" || operation.status === "failed")) {
+        holdingsRefreshVersionRef.current += 1;
+        holdingsRefreshAttemptsRef.current = 0;
+        setHoldingsRefreshPending(true);
+      }
+    };
+    const promise = (async () => {
+      setRefreshingAll(true);
+      setRefreshProgress({ checked: 0, total: unresolved.length, failures: 0 });
+      refreshTargetsRef.current = new Set(unresolved.map((target) => `${target.address.toLowerCase()}:${target.txHash}`));
+      refreshHoldingsStartedRef.current = false;
+      const deadline = Date.now() + STATUS_REFRESH_DEADLINE_MS;
+      const maybeRefreshHoldings = () => {
+        const forceManual = manualRefreshRequestedRef.current;
+        const requestedVersion = holdingsRefreshVersionRef.current;
+        if (holdingsPromise || !current() || !selectedToken || (!forceManual && (holdingsAppliedVersionRef.current >= requestedVersion || holdingsRefreshAttemptsRef.current >= HOLDINGS_REFRESH_RETRIES))) return;
+        refreshHoldingsStartedRef.current = true;
+        holdingsPromise = (async () => {
+          try {
+            const nextSnapshot = await beforeDeadline(() => getNodeTradingSnapshot(selectedToken, currentSession.addresses), deadline, "Holdings refresh timed out.");
+            if (!current() || nextSnapshot.tokenAddress.toLowerCase() !== selectedToken.toLowerCase()) return;
+            setSnapshot(nextSnapshot);
+            holdingsAppliedVersionRef.current = Math.max(holdingsAppliedVersionRef.current, requestedVersion);
+            holdingsRefreshAttemptsRef.current = 0;
+            setHoldingsRefreshPending(holdingsAppliedVersionRef.current < holdingsRefreshVersionRef.current);
+            onNodeBalancesRefresh?.();
+          } catch (caught) {
+            if (!current()) return;
+            failures.push(safeMessage(caught));
+            if (!forceManual) {
+              holdingsRefreshAttemptsRef.current += 1;
+              const retry = holdingsRefreshAttemptsRef.current < HOLDINGS_REFRESH_RETRIES;
+              setHoldingsRefreshPending(retry);
+              if (!retry) setRefreshNotice("Transaction status updated, but holdings could not be refreshed. Use Refresh all to try again.");
+            }
+          }
+        })();
+      };
+      let next = 0;
+      async function worker() {
+        while (next < unresolved.length && current() && Date.now() < deadline) {
+          const target = unresolved[next++];
+          try {
+            publish(target, await beforeDeadline(() => refreshNodeTradeOperation(target.address), deadline, "Transaction status refresh timed out."));
+          } catch (caught) {
+            failures.push(safeMessage(caught));
+          } finally {
+            checked += 1;
+            if (current()) setRefreshProgress({ checked, total: unresolved.length, failures: failures.length });
+            maybeRefreshHoldings();
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(3, unresolved.length) }, () => worker()));
+      if (!current()) return;
+      if (next < unresolved.length) failures.push("Transaction status refresh timed out before every node was checked.");
+      maybeRefreshHoldings();
+      if (holdingsPromise) await holdingsPromise;
+      if (current()) setRefreshNotice(failures.length
+        ? `Refresh incomplete · ${failures.length} check${failures.length === 1 ? "" : "s"} failed. ${failures[0]} Pending or unknown nodes remain blocked.`
+        : manualRefreshRequestedRef.current ? "Transactions and node holdings refreshed." : "");
+    })().finally(() => {
+      const runAgain = refreshQueuedRef.current;
+      const manualAgain = refreshQueuedManualRef.current;
+      manualRefreshRequestedRef.current = manualAgain;
+      refreshQueuedRef.current = false;
+      refreshQueuedManualRef.current = false;
+      refreshTargetsRef.current.clear();
+      refreshHoldingsStartedRef.current = false;
+      if (refreshPromiseRef.current === promise) {
+        refreshPromiseRef.current = null;
+        if (current()) {
+          setRefreshingAll(false);
+          if (runAgain) setTimeout(() => { if (current()) void refreshAll(false); }, 0);
+        }
+      }
+    });
+    refreshPromiseRef.current = promise;
+    return promise;
+  }, [session, snapshot, onNodeBalancesRefresh]);
 
   async function loadSnapshot(token: string, current: NodeSession, generation: number) {
     actionRef.current = "loading";
@@ -166,6 +353,19 @@ export default function NodeTrading({ session, launchedTokenAddress = "" }: Node
     setBatchResults([]);
     setStopping(false);
     setBatchActive(false);
+    setRefreshingAll(false);
+    setRefreshNotice("");
+    setRefreshProgress(null);
+    setHoldingsRefreshPending(false);
+    refreshPromiseRef.current = null;
+    refreshQueuedRef.current = false;
+    refreshQueuedManualRef.current = false;
+    refreshTargetsRef.current.clear();
+    refreshHoldingsStartedRef.current = false;
+    manualRefreshRequestedRef.current = false;
+    holdingsRefreshVersionRef.current = 0;
+    holdingsAppliedVersionRef.current = 0;
+    holdingsRefreshAttemptsRef.current = 0;
     stopBatchRef.current = true;
     setError("");
     setOperations({});
@@ -185,21 +385,32 @@ export default function NodeTrading({ session, launchedTokenAddress = "" }: Node
     };
   }, [session, sessionKey, launchedTokenAddress]);
 
-  useEffect(() => {
-    if (!review && !batch) return;
-    window.requestAnimationFrame(() => {
-      const target = batch ? batchReviewRef.current : reviewRef.current;
-      target?.focus();
-      target?.scrollIntoView({ block: "start" });
-    });
-  }, [review, batch]);
-
   const batchReadyCount = batch?.entries.filter((entry) => entry.status === "ready").length || 0;
   const rows = useMemo(() => {
     if (!session || !snapshot) return [];
     const byAddress = new Map(snapshot.balances.map((balance) => [balance.nodeAddress.toLowerCase(), balance]));
     return session.addresses.map((address, index) => ({ address, index, balance: byAddress.get(address.toLowerCase()) || null }));
   }, [sessionKey, snapshot]);
+  const unresolvedKey = session ? session.addresses.flatMap((address) => {
+    const operation = operations[address.toLowerCase()];
+    return operation && (operation.status === "pending" || operation.status === "unknown") ? [`${address}:${operation.txHash}:${operation.status}`] : [];
+  }).join("|") : "";
+
+  useEffect(() => {
+    if (!session) return;
+    const run = () => { if (document.visibilityState === "visible") void refreshAll(false); };
+    run();
+    const focus = () => run();
+    const visible = () => run();
+    window.addEventListener("focus", focus);
+    document.addEventListener("visibilitychange", visible);
+    const timer = unresolvedKey || holdingsRefreshPending ? window.setInterval(run, 2000) : null;
+    return () => {
+      window.removeEventListener("focus", focus);
+      document.removeEventListener("visibilitychange", visible);
+      if (timer !== null) window.clearInterval(timer);
+    };
+  }, [session, unresolvedKey, holdingsRefreshPending, action, refreshAll]);
 
   function updateToken(value: string) {
     generationRef.current += 1;
@@ -224,6 +435,12 @@ export default function NodeTrading({ session, launchedTokenAddress = "" }: Node
     if (!session || actionRef.current !== "idle") return;
     const generation = ++generationRef.current;
     void loadSnapshot(tokenInput.trim(), session, generation);
+  }
+
+  function handleRefreshAll() {
+    if (!session || !snapshot) return;
+    setRefreshNotice("");
+    void refreshAll(true);
   }
 
   async function handlePrepare(index: number, side: NodeTradeSide, amount: NodeTradeAmount) {
@@ -311,6 +528,7 @@ export default function NodeTrading({ session, launchedTokenAddress = "" }: Node
     setStopping(false);
     setBatchActive(true);
     setBatchOutcome(null);
+    setRefreshNotice("");
     stopBatchRef.current = false;
     const assertCurrent = () => {
       if (generation !== generationRef.current || stopBatchRef.current || selectionRef.current.session !== currentSession || selectionRef.current.launchedTokenAddress !== currentLaunch) {
@@ -367,13 +585,29 @@ export default function NodeTrading({ session, launchedTokenAddress = "" }: Node
   async function handleRefreshOperation(address: string) {
     if (actionRef.current !== "idle") return;
     const generation = ++generationRef.current;
+    const previous = operationsRef.current[address.toLowerCase()];
     actionRef.current = "refreshing";
     setAction("refreshing");
     setError("");
     try {
       const operation = await refreshNodeTradeOperation(address);
       if (generation !== generationRef.current) return;
+      if (previous && operation.txHash !== previous.txHash) return;
       setOperations((current) => ({ ...current, [address.toLowerCase()]: operation }));
+      const existingResults = batchResultsRef.current;
+      const updatedResults = existingResults.map((result) => result.nodeAddress.toLowerCase() === address.toLowerCase() && result.operation?.txHash === operation.txHash ? { ...result, operation } : result);
+      if (updatedResults.some((result, index) => result.operation !== existingResults[index]?.operation)) {
+        batchResultsRef.current = updatedResults;
+        setBatchResults(updatedResults);
+        setBatchOutcome(refreshedBatchOutcome(updatedResults));
+      }
+      const currentReview = tradeReviewStateRef.current;
+      if (currentReview?.nodeAddress.toLowerCase() === address.toLowerCase() && currentReview.tokenAddress.toLowerCase() === operation.tokenAddress.toLowerCase() && currentReview.action === operation.action) setTradeOutcome(submissionOutcome(operation));
+      if (previous && (previous.status === "pending" || previous.status === "unknown") && (operation.status === "confirmed" || operation.status === "failed")) {
+        holdingsRefreshVersionRef.current += 1;
+        holdingsRefreshAttemptsRef.current = 0;
+        setHoldingsRefreshPending(true);
+      }
     } catch (caught) {
       if (generation === generationRef.current) setError(safeMessage(caught));
     } finally {
@@ -412,10 +646,12 @@ export default function NodeTrading({ session, launchedTokenAddress = "" }: Node
             </dl>
             <p className={styles.phase}>{snapshot.phaseMessage}</p>
             <div className={styles.bulkToolbar} aria-label="Trade with all nodes">
-              <div><strong>All nodes</strong><p>Submit each eligible node’s maximum amount immediately, with ETH retained for gas.</p></div>
+              <div><strong>All nodes</strong><p>Submit each eligible node’s maximum amount immediately, with ETH retained for gas. Pending transactions refresh automatically while this page is visible. Refresh checks only; it never funds a node or resubmits a transaction.</p></div>
               <button className={styles.primaryButton} type="button" onClick={() => handlePrepareBatch("buy")} disabled={!snapshot.tradingAvailable || !rows.length || action !== "idle"}>Buy Max All Nodes</button>
               <button className={styles.secondaryButton} type="button" onClick={() => handlePrepareBatch("sell")} disabled={!snapshot.tradingAvailable || !rows.length || action !== "idle"}>Sell Max All Nodes</button>
+              <button className={styles.secondaryButton} type="button" onClick={handleRefreshAll}>{refreshingAll ? "Refresh all requested…" : "Refresh all transactions & nodes"}</button>
             </div>
+            <p className={styles.refreshStatus} role="status" aria-live="polite">{refreshingAll ? `Checking transactions ${refreshProgress?.checked || 0} of ${refreshProgress?.total || 0}${refreshProgress?.failures ? ` · ${refreshProgress.failures} failed` : ""}…` : refreshNotice}</p>
             {action === "preparing" && <p className={styles.phase} role="status">Checking fresh amounts and gas before immediate submission…</p>}
             {action === "executing" && <p className={styles.phase} role="status">Signing and submitting the selected actions…</p>}
             {batchActive && action === "preparing" && <button className={styles.secondaryButton} type="button" disabled={stopping} onClick={() => { stopBatchRef.current = true; setStopping(true); }}>{stopping ? "Stopping remaining nodes…" : "Stop remaining nodes"}</button>}
@@ -440,7 +676,7 @@ export default function NodeTrading({ session, launchedTokenAddress = "" }: Node
             </div>
           </>}
 
-          {batch && <div ref={batchReviewRef} className={styles.review} aria-live="polite" aria-labelledby="node-batch-review-title" tabIndex={-1}>
+          {batch && <div className={styles.review} aria-live="polite" aria-labelledby="node-batch-review-title">
             <div className={styles.reviewHeading}><h3 id="node-batch-review-title">{batch.mode === "approvals" ? "Approval-only action details" : `${batch.side === "buy" ? "Buy" : "Sell"} Max All Nodes · action details`}</h3><em>{batchOutcome?.label || (batchActive ? "Processing" : "Action details")}</em></div>
             {batchActive && action === "executing" && <button className={styles.secondaryButton} type="button" disabled={stopping} onClick={() => { stopBatchRef.current = true; setStopping(true); }}>{stopping ? "Stopping remaining nodes…" : "Stop remaining nodes"}</button>}
             {batchOutcome?.error && <p className={styles.alert} role="alert">{batchOutcome.error}</p>}
@@ -448,7 +684,7 @@ export default function NodeTrading({ session, launchedTokenAddress = "" }: Node
             <p className={styles.phase}>{batchReadyCount} of {batch.entries.length} nodes ready · Robinhood Chain · 4663</p>
             <dl className={styles.reviewDetails}><div><dt>Maximum total gas</dt><dd>{formatEth(batch.maxGasCostWei)} ETH</dd></div><div><dt>Maximum total ETH debit</dt><dd>{formatEth(batch.maxTotalEthWei)} ETH</dd></div></dl>
             <p className={styles.warning}>Each node submits separately. Prices can change between nodes. If an action fails, expires, or has an unknown outcome, remaining nodes stop. Submitted transactions cannot be cancelled here.</p>
-            {batch.mode === "approvals" && <p className={styles.warning}>This batch submits approvals only. Nodes already approved will wait. After checking confirmation for each approval, choose Sell Max All Nodes again for fresh sale quotes. No sales follow automatically.</p>}
+            {batch.mode === "approvals" && <p className={styles.warning}>This batch submits approvals only. Nodes already approved will wait. After each approval confirms, choose Sell Max All Nodes again for fresh sale quotes. No sales follow automatically. If an existing node lacks ETH for approval and the following sale, fund it before trying again.</p>}
             {batch.entries.map((entry) => {
               const item = entry.review;
               return <article className={styles.node} key={entry.nodeAddress}>
@@ -475,9 +711,9 @@ export default function NodeTrading({ session, launchedTokenAddress = "" }: Node
             {batchReadyCount === 0 && <p className={styles.warning}>No nodes are ready. Resolve the reasons above, then choose the all-node action again.</p>}
           </div>}
 
-          {batchResults.length > 0 && <div className={styles.operation} role="status" aria-label="All-node submission results"><strong>All-node submission results</strong><p>Submitted means sent, not confirmed. Use each node’s transaction status check before another action.</p>{batchResults.map((result) => <div key={result.nodeAddress}><strong>Node {result.nodeIndex + 1} · {result.status}</strong>{result.operation && <code className={styles.fullAddress}>{result.operation.txHash}</code>}{result.error && <p>{result.error}</p>}</div>)}</div>}
+          {batchResults.length > 0 && <div className={styles.operation} role="status" aria-label="All-node submission results"><strong>All-node submission results</strong><p>Pending transactions refresh automatically while this page is visible. Unknown outcomes remain blocked and are never resent automatically.</p>{batchResults.map((result) => <div key={result.nodeAddress}><strong>Node {result.nodeIndex + 1} · {result.operation?.status || result.status}</strong>{result.operation && <code className={styles.fullAddress}>{result.operation.txHash}</code>}{result.error && <p>{result.error}</p>}</div>)}</div>}
 
-          {review && <div ref={reviewRef} className={styles.review} aria-live="polite" aria-labelledby="node-trade-review-title" tabIndex={-1}>
+          {review && <div className={styles.review} aria-live="polite" aria-labelledby="node-trade-review-title">
             <div className={styles.reviewHeading}><div><span className={styles.eyebrow}>Selected action details</span><h3 id="node-trade-review-title">{actionLabel(review.action)} · node {review.nodeIndex + 1}</h3></div><em>{tradeOutcome?.label || "Action details"}</em></div>
             {tradeOutcome?.error && <p className={styles.alert} role="alert">{tradeOutcome.error}</p>}
             <code className={styles.fullAddress}>{review.nodeAddress}</code><code className={styles.fullAddress}>{review.tokenAddress}</code>

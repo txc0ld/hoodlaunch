@@ -20,13 +20,13 @@ const reactSources=${JSON.stringify(reactSources)},reactModules={};
 function reactRequire(name){if(reactModules[name])return reactModules[name].exports;const module={exports:{}};reactModules[name]=module;new Function('require','module','exports','process',reactSources[name])(reactRequire,module,module.exports,process);return module.exports;}
 const React=reactRequire('react'),ReactDOM=reactRequire('react-dom/client'),DOM=reactRequire('react-dom');
 const jsx=(type,props,key)=>React.createElement(type,{...props,key}),runtime={jsx,jsxs:jsx,Fragment:React.Fragment};
-window.__test={callbacks:[],forgets:[],layoutCallbacks:0,signs:0,broadcasts:0,bridgeMounts:0,fundingMounts:0};
+window.__test={callbacks:[],forgets:[],layoutCallbacks:0,signs:0,broadcasts:0,bridgeMounts:0,fundingMounts:0,balanceReads:0};
 const live=new Set();
 function Manager(props){
  React.useLayoutEffect(()=>{__test.callbacks.push(props.onSessionChange);return()=>{__test.layoutCallbacks++;props.onSessionChange({id:'stale-layout',addresses:[]});};},[]);
- return jsx('div',{'data-manager':true,'data-finance':props.financeEnabled});
+ return jsx('div',{'data-manager':true,'data-finance':props.financeEnabled,'data-balance-refresh':props.balanceRefreshVersion});
 }
-function Trading({session}){return jsx('div',{'data-trading':session?.id||'none'});}
+function Trading({session,onNodeBalancesRefresh}){return jsx('div',{'data-trading':session?.id||'none',children:jsx('button',{'data-refresh-node-balances':true,onClick:onNodeBalancesRefresh,children:'Refresh node balances'})});}
 const noop=()=>null;
 const modules={
  'react':React,'react/jsx-runtime':runtime,'ethers':ethers,
@@ -49,7 +49,7 @@ window.useActualManager=()=>{
   recordNodeActivity(){}
  });
  modules['../lib/node-generation']={GenerationError:class extends Error{},nodeGenerationRequest:async identity=>({sessionIdentity:identity,enabled:true,available:true,maxCount:50,nextEligibleAt:null})};
- modules['../lib/node-balances']={getNodeBalances:async()=>{throw Error('No balance reads expected');}};
+ modules['../lib/node-balances']={getNodeBalances:async addresses=>{__test.balanceReads++;return {chainId:4663,blockNumber:100,checkedAt:Date.now(),balances:addresses.map(address=>({address,balanceWei:'10000000000000000'}))};}};
  modules['./NodeBridge']={default:()=>{__test.bridgeMounts++;return jsx('div',{'data-bridge':true});}};
  modules['./ExchangeFunding']={default:()=>{__test.fundingMounts++;return jsx('div',{'data-funding':true});}};
  const managerModule={exports:{}};
@@ -97,6 +97,9 @@ const html = '<!doctype html><div id="root"></div><script>' + ethers.replace(/<\
   await page.evaluate(props=>renderWorkspace({...props,launchEnabled:true}),base);
   assert.equal(await page.locator('[data-trading]').getAttribute('data-trading'),'launch-independent');
   assert.equal(await page.locator('[data-manager]').getAttribute('data-finance'),'true');
+  assert.equal(await page.locator('[data-manager]').getAttribute('data-balance-refresh'),'0');
+  await page.locator('[data-refresh-node-balances]').click();
+  assert.equal(await page.locator('[data-manager]').getAttribute('data-balance-refresh'),'1');
   // Exercise actual PonsLaunchpad + NodeManager with an inert verified-vault
   // fixture. No encryption, secrets, external providers or real funds involved.
   await page.evaluate(props=>{useActualManager();renderWorkspace({...props,launchEnabled:true,financeEnabled:false});},base);
@@ -118,6 +121,9 @@ const html = '<!doctype html><div id="root"></div><script>' + ethers.replace(/<\
   await restoreFixture();
   assert.equal(await page.locator('[data-bridge]').count(),1);
   assert.equal(await page.locator('[data-funding]').count(),1);
+  await page.locator('[data-refresh-node-balances]').click();
+  await page.waitForFunction(()=>__test.balanceReads===1);
+  await page.getByText(/balance snapshot.*block 100/).waitFor();
   await page.evaluate(props=>renderWorkspace({...props,launchEnabled:true,financeEnabled:false}),base);
   assert.equal(await page.locator('[data-bridge], [data-funding]').count(),0);
   assert.equal(await page.locator('[data-trading]').getAttribute('data-trading'),'none');

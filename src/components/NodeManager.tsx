@@ -27,6 +27,7 @@ export interface NodeManagerProps {
   sessionIdentity: string;
   proEnabled?: boolean;
   financeEnabled?: boolean;
+  balanceRefreshVersion?: number;
   onSessionChange?: (session: NodeSession | null) => void;
 }
 
@@ -53,7 +54,7 @@ function shortAddress(address: string) {
   return `${address.slice(0, 8)}…${address.slice(-6)}`;
 }
 
-export default function NodeManager({ onSessionChange, sessionIdentity, proEnabled = false, financeEnabled = false }: NodeManagerProps) {
+export default function NodeManager({ onSessionChange, sessionIdentity, proEnabled = false, financeEnabled = false, balanceRefreshVersion = 0 }: NodeManagerProps) {
   const [open, setOpen] = useState(false);
   const [count, setCount] = useState(proEnabled ? 5 : 1);
   const [allowance, setAllowance] = useState<NodeAllowance | null>(null);
@@ -84,6 +85,7 @@ export default function NodeManager({ onSessionChange, sessionIdentity, proEnabl
   const lastActivity = useRef(Date.now());
   const vaultGeneration = useRef(0);
   const balanceGeneration = useRef(0);
+  const appliedBalanceRefreshVersion = useRef(0);
 
   useEffect(() => {
     sessionRef.current = session;
@@ -403,6 +405,12 @@ export default function NodeManager({ onSessionChange, sessionIdentity, proEnabl
       if (generation === balanceGeneration.current) setBalancesLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (balanceRefreshVersion <= appliedBalanceRefreshVersion.current || balancesLoading || !financeEnabled || !session || !verified || !targetWei) return;
+    appliedBalanceRefreshVersion.current = balanceRefreshVersion;
+    void handleBalanceCheck();
+  }, [balanceRefreshVersion, balancesLoading, financeEnabled, session, verified, targetWei]);
 
   async function copyAddresses() {
     if (!verified || !session) return;

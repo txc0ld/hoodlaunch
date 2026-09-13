@@ -120,6 +120,7 @@ function WalletWorkspace({ sessionIdentity, proEnabled, generationEnabled, nodeT
   nodeTradingEnabled: boolean; financeEnabled: boolean; launchedTokenAddress: string; children: ReactNode;
 }) {
   const [nodeSession, setNodeSession] = useState<NodeSession | null>(null);
+  const [nodeBalanceRefreshVersion, setNodeBalanceRefreshVersion] = useState(0);
   const owner = useRef<{ active: boolean; session: NodeSession | null }>({ active: true, session: null });
   useLayoutEffect(() => {
     owner.current.active = true;
@@ -136,14 +137,15 @@ function WalletWorkspace({ sessionIdentity, proEnabled, generationEnabled, nodeT
     owner.current.session = session;
     setNodeSession(session);
   }, []);
+  const refreshNodeBalances = useCallback(() => setNodeBalanceRefreshVersion((version) => version + 1), []);
   const canTrade = generationEnabled && nodeTradingEnabled && Boolean(sessionIdentity) && proEnabled;
   return <>
     {children}
     <section id="wallet-workspace" className={styles.integrationSlot} aria-label="Wallet generator" tabIndex={-1}>
       <div className={styles.workspaceIntro}><p className={styles.eyebrow}>03 / WALLETS</p><h2>Wallet workspace</h2><p>Generate or restore controlled wallets, verify the backup, then <a href="#node-trading">load a token to trade</a>.</p></div>
-      {!generationEnabled ? <p className={styles.pendingNotice} role="status">Wallet creation and recovery are currently unavailable.</p> : !sessionIdentity ? <p className={styles.pendingNotice}><a href="#pro-account">Sign in to create or restore wallets.</a></p> : <NodeManager sessionIdentity={sessionIdentity} proEnabled={proEnabled} financeEnabled={proEnabled && financeEnabled} onSessionChange={acceptSession} />}
+      {!generationEnabled ? <p className={styles.pendingNotice} role="status">Wallet creation and recovery are currently unavailable.</p> : !sessionIdentity ? <p className={styles.pendingNotice}><a href="#pro-account">Sign in to create or restore wallets.</a></p> : <NodeManager sessionIdentity={sessionIdentity} proEnabled={proEnabled} financeEnabled={proEnabled && financeEnabled} balanceRefreshVersion={nodeBalanceRefreshVersion} onSessionChange={acceptSession} />}
     </section>
-    {canTrade ? <NodeTrading session={nodeSession} launchedTokenAddress={launchedTokenAddress} /> : <section id="node-trading" className={styles.pendingNotice} tabIndex={-1} aria-labelledby="trading-unavailable-title"><h2 id="trading-unavailable-title">Multi-wallet buying & selling</h2><span>Trade existing native ETH-paired PONS tokens using your verified wallets. Trading availability is separate from launching a new token.</span>{!generationEnabled || !nodeTradingEnabled ? <p role="status">Multi-wallet trading is currently unavailable.</p> : !sessionIdentity ? <a href="#pro-account">Sign in with Pro access to use multi-wallet trading.</a> : <p>Multi-wallet trading requires Pro. <a href="#pro-account">Check your account access.</a></p>}</section>}
+    {canTrade ? <NodeTrading session={nodeSession} launchedTokenAddress={launchedTokenAddress} onNodeBalancesRefresh={refreshNodeBalances} /> : <section id="node-trading" className={styles.pendingNotice} tabIndex={-1} aria-labelledby="trading-unavailable-title"><h2 id="trading-unavailable-title">Multi-wallet buying & selling</h2><span>Trade existing native ETH-paired PONS tokens using your verified wallets. Trading availability is separate from launching a new token.</span>{!generationEnabled || !nodeTradingEnabled ? <p role="status">Multi-wallet trading is currently unavailable.</p> : !sessionIdentity ? <a href="#pro-account">Sign in with Pro access to use multi-wallet trading.</a> : <p>Multi-wallet trading requires Pro. <a href="#pro-account">Check your account access.</a></p>}</section>}
   </>;
 }
 
