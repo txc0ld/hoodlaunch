@@ -202,6 +202,7 @@ export default function NodeTrading({ accountReadiness = false, session, launche
   const holdingsRefreshVersionRef = useRef(0);
   const holdingsAppliedVersionRef = useRef(0);
   const holdingsRefreshAttemptsRef = useRef(0);
+  const tradeOutcomeOperationRef = useRef<{ review: NodeTradeReview; txHash: string } | null>(null);
   const operationsRef = useRef(operations);
   operationsRef.current = operations;
   const batchResultsRef = useRef(batchResults);
@@ -236,8 +237,8 @@ export default function NodeTrading({ accountReadiness = false, session, launche
         setBatchResults(updatedResults);
         setBatchOutcome(refreshedBatchOutcome(updatedResults));
       }
-      const currentReview = tradeReviewStateRef.current;
-      if (currentReview?.nodeAddress.toLowerCase() === key && currentReview.tokenAddress.toLowerCase() === next.tokenAddress.toLowerCase() && currentReview.action === next.action) setTradeOutcome(submissionOutcome(next));
+      const tradeBinding = tradeOutcomeOperationRef.current;
+      if (tradeBinding?.txHash === next.txHash && tradeReviewStateRef.current === tradeBinding.review) setTradeOutcome(submissionOutcome(next));
     }
     if ((previous.status === "pending" || previous.status === "unknown") && (next.status === "confirmed" || next.status === "failed")) {
       holdingsRefreshVersionRef.current += 1;
@@ -262,6 +263,11 @@ export default function NodeTrading({ accountReadiness = false, session, launche
     });
     setOperations(next);
     setBlockedStorage(blocked);
+  }
+
+  function clearTradeReview() {
+    tradeOutcomeOperationRef.current = null;
+    setReview(null);
   }
 
   const refreshAll = useCallback((manual: boolean) => {
@@ -391,14 +397,14 @@ export default function NodeTrading({ accountReadiness = false, session, launche
     actionRef.current = "loading";
     setAction("loading");
     setError("");
-    setReview(null);
+    clearTradeReview();
     setBatch(null);
     try {
       const next = await beforeDeadline(() => snapshotRead(token, current.addresses), Date.now() + STATUS_REFRESH_DEADLINE_MS, "Holdings refresh timed out.");
       if (generation !== generationRef.current || current !== session) return;
       setTokenInput(next.tokenAddress);
       setSnapshot(next);
-      setReview(null);
+      clearTradeReview();
       setBatch(null);
     } catch (caught) {
       if (generation === generationRef.current) {
@@ -422,7 +428,7 @@ export default function NodeTrading({ accountReadiness = false, session, launche
     customAmountsRef.current = {};
     setCustomAmounts({});
     setCustomErrors({});
-    setReview(null);
+    clearTradeReview();
     setBatch(null);
     batchResultsRef.current = [];
     setBatchResults([]);
@@ -495,7 +501,7 @@ export default function NodeTrading({ accountReadiness = false, session, launche
     customAmountsRef.current = {};
     setCustomAmounts({});
     setCustomErrors({});
-    setReview(null);
+    clearTradeReview();
     setBatch(null);
     batchResultsRef.current = [];
     setBatchResults([]);
@@ -548,7 +554,7 @@ export default function NodeTrading({ accountReadiness = false, session, launche
     };
     actionRef.current = "preparing";
     setAction("preparing");
-    setReview(null);
+    clearTradeReview();
     setBatch(null);
     batchResultsRef.current = [];
     setBatchResults([]);
@@ -569,7 +575,9 @@ export default function NodeTrading({ accountReadiness = false, session, launche
       actionRef.current = "executing";
       setAction("executing");
       const operation = await executeNodeTrade(currentSession, next, assertCurrent);
-      assertCurrent();
+      if (generation !== generationRef.current || selectionRef.current.session !== currentSession || selectionRef.current.launchedTokenAddress !== currentLaunch) return;
+      tradeOutcomeOperationRef.current = { review: next, txHash: operation.txHash };
+      operationsRef.current = { ...operationsRef.current, [operation.nodeAddress.toLowerCase()]: operation };
       setOperations((current) => ({ ...current, [operation.nodeAddress.toLowerCase()]: operation }));
       setTradeOutcome(submissionOutcome(operation));
     } catch (caught) {
@@ -602,7 +610,7 @@ export default function NodeTrading({ accountReadiness = false, session, launche
     const currentLaunch = launchedTokenAddress;
     actionRef.current = "preparing";
     setAction("preparing");
-    setReview(null);
+    clearTradeReview();
     setBatch(null);
     batchResultsRef.current = [];
     setBatchResults([]);
