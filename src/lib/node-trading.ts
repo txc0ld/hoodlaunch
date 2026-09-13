@@ -223,13 +223,16 @@ export async function executeTrade(owner:object,review:NodeTradeReview,assertAct
       if(!sameLaunch(launch,cap.launch))throw new Error('The launch route changed. Prepare a fresh trade.');
       const t=new Contract(review.tokenAddress,TRADE_TOKEN_ABI,p);
       const isSwap=review.action==='buy'||review.action==='sell',isSell=isSwap&&review.side==='sell';
-      const [balance,holding,feeData,estimate,simulation,q,allowance,permitAllowance]=await Promise.all([p.getBalance(review.nodeAddress,'pending'),t.balanceOf(review.nodeAddress,{blockTag:block}),
+      const [balanceResult,checksResult]=await Promise.allSettled([p.getBalance(review.nodeAddress,'pending'),Promise.all([t.balanceOf(review.nodeAddress,{blockTag:block}),
         feesAndNonce(p,review.nodeAddress),p.estimateGas({...cap.tx,from:review.nodeAddress}),p.call({...cap.tx,from:review.nodeAddress},'pending'),
         isSwap?quote(p,launch,review.nodeAddress,review.side,BigNumber.from(review.amountInRaw),block):Promise.resolve(null),
         isSell?t.allowance(review.nodeAddress,review.phase===0?launch.curve:TRADE_PERMIT2,{blockTag:block}):Promise.resolve(null),
         isSell&&review.phase===2?new Contract(TRADE_PERMIT2,TRADE_PERMIT_ABI,p).allowance(review.nodeAddress,review.tokenAddress,TRADE_ROUTER,{blockTag:block}):Promise.resolve(null),
-      ]);
-      assertAffordable(balance,BigNumber.from(review.maxTotalEthWei),BigNumber.from(review.requiredRemainingEthWei));
+      ])]);
+      if(balanceResult.status==='rejected')throw balanceResult.reason;
+      assertAffordable(balanceResult.value,BigNumber.from(review.maxTotalEthWei),BigNumber.from(review.requiredRemainingEthWei));
+      if(checksResult.status==='rejected')throw checksResult.reason;
+      const [holding,feeData,estimate,simulation,q,allowance,permitAllowance]=checksResult.value;
       if(feeData.nonce!==cap.tx.nonce)throw new Error('This node\'s transaction nonce changed. Refresh status and prepare a fresh trade.');
       // The new recommendation is not the cost of this immutable reviewed transaction.
       // Require the current base fee and the full original priority fee to fit its cap.

@@ -141,10 +141,13 @@ async function loopbackRpc({ delayMs = 5, chainId = '0x1237', phase = 0, sellGas
     if (method === 'eth_maxPriorityFeePerGas') return '0x3b9aca00';
     if (method === 'eth_estimateGas') {
       const tx = params[0];
-      if (tx.maxFeePerGas && ethers.BigNumber.from(tx.value || 0).add(ethers.BigNumber.from(gasFor(tx)).mul(tx.maxFeePerGas)).gt(state.balance)) throw Error('insufficient funds for gas');
+      if (!state.estimateIgnoresBalance && tx.maxFeePerGas && ethers.BigNumber.from(tx.value || 0).add(ethers.BigNumber.from(gasFor(tx)).mul(tx.maxFeePerGas)).gt(state.balance)) throw Error('insufficient funds for gas');
       return ethers.utils.hexValue(gasFor(tx));
     }
-    if (method === 'eth_call') return callResult(params[0], state);
+    if (method === 'eth_call') {
+      if (params[1] === 'pending' && state.rejectPendingCall) throw Error('fixture pending simulation rejection');
+      return callResult(params[0], state);
+    }
     if (method === 'eth_sendRawTransaction') {
       const tx = ethers.utils.parseTransaction(params[0]);
       assert.equal(tx.nonce, accountNonces.get(tx.from.toLowerCase()) || 0);
@@ -557,6 +560,36 @@ for (const balance of ['273277424449999', '171212810152000']) test(`sell diagnos
   assert.equal(ethers.BigNumber.from(estimates[0].params[0].maxPriorityFeePerGas).toString(), '1500000000');
   assert.equal(estimates[0].params[0].gasPrice, undefined, 'Sale estimation explicitly supplies reviewed EIP-1559 fees');
   assert.ok(h.rpc.requests.some(r => r.method === 'eth_getBalance' && r.params[1] === 'pending'));
+});
+
+for (const failingRead of ['estimate', 'simulation']) test(`sell execution affordability: ${failingRead} failure cannot mask the known reviewed gas shortfall`, async t => {
+  const h = await sellAffordabilityFixture(t, { balance: eth('1').toString() });
+  const review = await h.trading.prepareTrade(h.session, 0, wallet.address, TOKEN, 'sell', 100, () => {});
+  h.rpc.state.balance = ethers.BigNumber.from(1); let signs = 0;
+  if (failingRead === 'simulation') { h.rpc.state.estimateIgnoresBalance = true; h.rpc.state.rejectPendingCall = true; }
+  await assert.rejects(h.trading.executeTrade(h.session, review, () => {}, async () => { signs++; throw Error('unexpected signer'); }), error => {
+    console.log('SELL_EXECUTION_SHORTAGE ' + JSON.stringify({ balance: '1', needed: review.maxTotalEthWei, error: error.message }));
+    assert.match(error.message, /insufficient ETH for upfront transaction gas/);
+    assert.ok(error.message.includes(`Balance ${ethers.utils.formatEther(1)}`));
+    assert.ok(error.message.includes(`need ${ethers.utils.formatEther(review.maxTotalEthWei)}`));
+    assert.ok(error.message.includes(`shortfall ${ethers.utils.formatEther(ethers.BigNumber.from(review.maxTotalEthWei).sub(1))} ETH`));
+    assert.ok(error.message.length < 300); return true;
+  });
+  assert.equal(signs, 0); assert.equal(h.rpc.state.transactions.size, 0);
+});
+
+for (const failingRead of ['estimate', 'simulation', 'balance']) test(`sell execution affordability: original ${failingRead} failure survives when no shortage is established`, async t => {
+  const h = await sellAffordabilityFixture(t, { balance: eth('1').toString() });
+  const review = await h.trading.prepareTrade(h.session, 0, wallet.address, TOKEN, 'sell', 100, () => {});
+  if (failingRead === 'simulation') h.rpc.state.rejectPendingCall = true;
+  else h.rpc.rejectMethod(failingRead === 'estimate' ? 'eth_estimateGas' : 'eth_getBalance');
+  if (failingRead === 'balance') h.rpc.state.balance = ethers.BigNumber.from(1);
+  let signs = 0;
+  await assert.rejects(h.trading.executeTrade(h.session, review, () => {}, async () => { signs++; throw Error('unexpected signer'); }), error => {
+    assert.match(error.message, failingRead === 'simulation' ? /fixture pending simulation rejection/ : /fixture provider rejection/);
+    assert.doesNotMatch(error.message, /shortfall|need [0-9]/); return true;
+  });
+  assert.equal(signs, 0); assert.equal(h.rpc.state.transactions.size, 0);
 });
 
 for (const [phase, action, buffer] of [[0, 'approve-token', '0.00005'], [2, 'approve-token', '0.0001'], [2, 'approve-router', '0.00005']]) test(`sell affordability: phase ${phase} ${action} keeps its following-step reserve`, async t => {
