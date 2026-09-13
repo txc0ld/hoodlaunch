@@ -106,7 +106,7 @@ function refreshedBatchOutcome(results: readonly NodeTradeBatchResult[], batch: 
     const failedApprovals = deferredSales.length ? unsent.filter((result) => result.status === "error").length : 0;
     const skippedApprovals = deferredSales.length ? unsent.length - deferredSales.length - failedApprovals : 0;
     const unsentSummary = deferredSales.length
-      ? `${deferredSales.length} sale${deferredSales.length === 1 ? " was" : "s were"} deliberately deferred. ${failedApprovals} approval${failedApprovals === 1 ? "" : "s"} failed and ${skippedApprovals} approval${skippedApprovals === 1 ? " was" : "s were"} skipped.`
+      ? `${deferredSales.length} sale${deferredSales.length === 1 ? " was" : "s were"} deliberately deferred. ${failedApprovals} approval${failedApprovals === 1 ? "" : "s"} failed and ${skippedApprovals} action${skippedApprovals === 1 ? " was" : "s were"} skipped.`
       : `${unsent.length} node${unsent.length === 1 ? " was" : "s were"} not submitted.`;
     const receiptState = unknown ? evidence === unknownResult ? "" : ` Node ${unknownResult.nodeIndex + 1} has an unknown submitted outcome. ${unknown.message}`
       : failed ? evidence === failedResult ? "" : ` Node ${failedResult.nodeIndex + 1} has a failed submitted transaction. ${failed.message}`
