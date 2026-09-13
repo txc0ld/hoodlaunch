@@ -30,7 +30,7 @@ const jsx=(type,props,key)=>React.createElement(type,{...props,key}),runtime={js
 const nativeTimeout=AbortSignal.timeout.bind(AbortSignal);AbortSignal.timeout=milliseconds=>nativeTimeout(Math.min(milliseconds,100));
 const IDENTITY='a'.repeat(64),NODE='0x1111111111111111111111111111111111111111',TOKEN='0x2222222222222222222222222222222222222222';
 const session=Object.freeze({id:'verified-fixture',addresses:Object.freeze([NODE]),backupVerified:true});
-const state={statusCalls:0,focusEvents:0,forgetCalls:0,batchExecutions:0,transientFailures:0,transientBody:'json',networkFailures:0,statusMode:'active',focusOnExecute:false,sharedSignalCalls:0,deadlineStep:0,logoutCalls:0,logoutFailures:0};
+const state={statusCalls:0,focusEvents:0,forgetCalls:0,batchExecutions:0,transientFailures:0,transientBody:'json',networkFailures:0,bodyFailures:0,statusMode:'active',focusOnExecute:false,sharedSignalCalls:0,deadlineStep:0,logoutCalls:0,logoutFailures:0};
 const access={sessionIdentity:IDENTITY,configured:true,signInAvailable:true,walletSignInAvailable:true,signedIn:true,pro:true,billing:true,billingAccount:false,billingAccountUnavailable:false,subscription:true,subscriptionUnavailable:false,holder:{address:null,verified:false,eligible:false,granted:false,balance:null,unavailable:false}};
 window.fetch=async(url,options)=>{
  const body=JSON.parse(options.body);if(url!=='/api/account')throw Error('Unexpected fixture request');
@@ -39,10 +39,12 @@ window.fetch=async(url,options)=>{
  state.statusCalls++;
  if(window.lastStatusSignal===options.signal)state.sharedSignalCalls++;window.lastStatusSignal=options.signal;
  if(state.networkFailures>0){state.networkFailures--;throw new TypeError('Fixture network interruption');}
+ if(state.bodyFailures>0){state.bodyFailures--;const stream=new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('{"signedIn":'));controller.error(new TypeError('Fixture response body interruption'));}});return new Response(stream,{status:200,headers:{'Content-Type':'application/json'}});}
  if(state.transientFailures>0){state.transientFailures--;const body=state.transientBody==='html'?'<html>temporary proxy failure</html>':state.transientBody==='empty'?'':JSON.stringify({error:'Temporary account status outage'});return new Response(body,{status:503,headers:{'Content-Type':state.transientBody==='json'?'application/json':'text/html'}});}
  if(state.statusMode==='unauthorized')return new Response(JSON.stringify({error:'Session is no longer authorized'}),{status:401,headers:{'Content-Type':'application/json'}});
  if(state.statusMode==='throttled')return new Response('',{status:429,headers:{'Retry-After':'60'}});
  if(state.statusMode==='malformed')return new Response('{',{status:200,headers:{'Content-Type':'application/json'}});
+ if(state.statusMode==='body-deadline'){const stream=new ReadableStream({start(controller){options.signal.addEventListener('abort',()=>controller.error(options.signal.reason),{once:true});}});return new Response(stream,{status:200,headers:{'Content-Type':'application/json'}});}
  if(state.statusMode==='deadline'){
   if(state.deadlineStep++===0){await new Promise(resolve=>setTimeout(resolve,60));return new Response(JSON.stringify({error:'Temporary account status outage'}),{status:503,headers:{'Content-Type':'application/json'}});}
   return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true}));
@@ -91,7 +93,7 @@ const proModules={
 const ProAccess=load(${JSON.stringify(sources.pro)},proModules);
 function App(){const[pro,setPro]=React.useState(false),[identity,setIdentity]=React.useState(null);return jsx(Launchpad,{launchEnabled:false,generationEnabled:true,nodeTradingEnabled:true,financeEnabled:false,proEnabled:pro,sessionIdentity:identity,proPanel:jsx(ProAccess,{onAccessChange:setPro,onSessionIdentityChange:setIdentity})});}
 const root=ReactDOM.createRoot(document.getElementById('root'));root.render(jsx(App,{}));
-window.test={state,setFocusOnExecute:value=>state.focusOnExecute=value,setStatusMode:value=>{state.statusMode=value;state.deadlineStep=0;},setTransientFailures:(value,body='json')=>{state.transientFailures=value;state.transientBody=body;},setNetworkFailures:value=>state.networkFailures=value,setLogoutFailures:value=>state.logoutFailures=value,focus:()=>window.dispatchEvent(new Event('focus')),pagehide:()=>window.dispatchEvent(new Event('pagehide')),releaseHeld:()=>window.releaseHeldStatus()};
+window.test={state,setFocusOnExecute:value=>state.focusOnExecute=value,setStatusMode:value=>{state.statusMode=value;state.deadlineStep=0;},setTransientFailures:(value,body='json')=>{state.transientFailures=value;state.transientBody=body;},setNetworkFailures:value=>state.networkFailures=value,setBodyFailures:value=>state.bodyFailures=value,setLogoutFailures:value=>state.logoutFailures=value,focus:()=>window.dispatchEvent(new Event('focus')),pagehide:()=>window.dispatchEvent(new Event('pagehide')),releaseHeld:()=>window.releaseHeldStatus()};
 `;
 
 const html = '<!doctype html><div id="root"></div><script>' + ethersSource.replace(/<\/script/gi, '<\\/script') + '</script><script>' + setup.replace(/<\/script/gi, '<\\/script') + '</script>';
@@ -205,6 +207,19 @@ const html = '<!doctype html><div id="root"></div><script>' + ethersSource.repla
     await page.waitForFunction(calls => test.state.statusCalls >= calls + 2, beforeNetworkFailure.statusCalls);
     assert.equal(await page.getByRole('button', { name: 'Sell Max All Nodes', exact: true }).count(), 1, 'A single network failure keeps the loaded wallet session after retry');
     assert.equal((await page.evaluate(() => test.state.statusCalls)) - beforeNetworkFailure.statusCalls, 2, 'A network failure retries once');
+
+    await restoreActiveAccess();
+    const beforeBodyFailure = await page.evaluate(() => ({ ...test.state }));
+    await page.evaluate(() => { test.setBodyFailures(1); test.focus(); });
+    await page.waitForTimeout(150);
+    assert.equal((await page.evaluate(() => test.state.statusCalls)) - beforeBodyFailure.statusCalls, 2, 'A response-body network failure retries once');
+    assert.equal(await page.getByRole('button', { name: 'Sell Max All Nodes', exact: true }).count(), 1, 'A response-body network failure keeps the loaded wallet session after retry');
+
+    await restoreActiveAccess();
+    const beforeBodyDeadline = await page.evaluate(() => ({ ...test.state }));
+    await page.evaluate(() => { test.setStatusMode('body-deadline'); test.focus(); });
+    await page.getByRole('button', { name: 'Sell Max All Nodes', exact: true }).waitFor({ state: 'detached' });
+    assert.equal((await page.evaluate(() => test.state.statusCalls)) - beforeBodyDeadline.statusCalls, 1, 'An aborted response body is not retried');
 
     await restoreActiveAccess();
     const beforeMalformed = await page.evaluate(() => ({ ...test.state }));

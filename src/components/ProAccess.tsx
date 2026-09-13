@@ -16,6 +16,9 @@ class AccountRequestError extends Error {
 function retryableStatusFailure(error: unknown) {
   return error instanceof AccountRequestError && error.retryable;
 }
+function terminalTransportFailure(error: unknown, signal: AbortSignal) {
+  return signal.aborted || (error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name));
+}
 export default function ProAccess({ onAccessChange, onSessionIdentityChange, salesEnabled = false }: { onAccessChange: (value: boolean) => void; salesEnabled?: boolean; onSessionIdentityChange?: (value: string | null) => void }) {
   const [access, setAccess] = useState<Access>(NONE);
   const [email, setEmail] = useState(''); const [code, setCode] = useState('');
@@ -32,10 +35,17 @@ export default function ProAccess({ onAccessChange, onSessionIdentityChange, sal
     try {
       response = await fetch('/api/account', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, ...data }), keepalive: options.keepalive === true, signal });
     } catch (error) {
-      if (signal.aborted || (error instanceof DOMException && ['AbortError', 'TimeoutError'].includes(error.name))) throw error;
+      if (terminalTransportFailure(error, signal)) throw error;
       throw new AccountRequestError(error instanceof Error ? error.message : 'Account services are unavailable.', true);
     }
-    if (response.ok) return response.json();
+    if (response.ok) {
+      try { return await response.json(); }
+      catch (error) {
+        if (terminalTransportFailure(error, signal) || error instanceof SyntaxError) throw error;
+        if (error instanceof TypeError) throw new AccountRequestError(error.message, true);
+        throw error;
+      }
+    }
     let message = 'Account services are unavailable.';
     try {
       const result = await response.json() as { error?: unknown };
