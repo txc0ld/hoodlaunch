@@ -22,7 +22,7 @@ export async function getNodeBalances(addresses: readonly string[]): Promise<Nod
   if (new Set(normalized.map((address) => address.toLowerCase())).size !== normalized.length) {
     throw new Error('Node wallet addresses must be unique.');
   }
-  const provider = new providers.JsonRpcProvider({ url: PONS_RPC, timeout: 15000 });
+  const provider = new providers.StaticJsonRpcProvider({ url: PONS_RPC, timeout: 15000 }, { chainId: PONS_CHAIN_ID, name: 'robinhood' });
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
   async function read(): Promise<NodeBalanceSnapshot> {

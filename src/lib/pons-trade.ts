@@ -170,9 +170,11 @@ export async function getNodeTradingSnapshot(token:string,nodes:readonly string[
   const addresses=nodes.map(tradeAddress);if(new Set(addresses).size!==addresses.length)throw new Error('Duplicate node addresses.');
   const p=tradeProvider();
   try{
-    await assertTradeChain(p);const block=await p.getBlockNumber();await verifyTradeCode(p,false,block);
-    const launch=await readTradeLaunch(p,token,block),t=new Contract(token,TRADE_TOKEN_ABI,p),b={blockTag:block};
-    const [symbol,decimals,total]=await Promise.all([t.symbol(b),t.decimals(b),t.totalSupply(b)]);
+    await assertTradeChain(p);const block=await p.getBlockNumber();
+    const t=new Contract(token,TRADE_TOKEN_ABI,p),b={blockTag:block};
+    const [,launch,symbol,decimals,total]=await Promise.all([
+      verifyTradeCode(p,false,block),readTradeLaunch(p,token,block),t.symbol(b),t.decimals(b),t.totalSupply(b),
+    ]);
     if(typeof symbol!=='string'||symbol.length>64||!Number.isInteger(decimals)||decimals<0||decimals>36||total.lte(0))throw new Error('Token metadata could not be verified.');
     const balances:NodeTradingBalance[]=[];
     for(let i=0;i<addresses.length;i+=4){

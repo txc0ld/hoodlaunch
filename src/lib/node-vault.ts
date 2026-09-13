@@ -354,7 +354,7 @@ export async function prepareNodeTrade(
   const copiedAmount = copyTradeAmount(amount);
   const { prepareTrade } = await import('./node-trading');
   requireBridgeNode(session, index);
-  return prepareTrade(session, index, walletAt(session, index).address, token, side, copiedAmount, () => { requireBridgeNode(session, index); });
+  return prepareTrade(session, index, session.addresses[index], token, side, copiedAmount, () => { requireBridgeNode(session, index); });
 }
 
 export async function executeNodeTrade(

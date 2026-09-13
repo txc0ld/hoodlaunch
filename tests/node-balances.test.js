@@ -17,7 +17,7 @@ function harness(options={}) {
   const source=fs.readFileSync(require('node:path').join(__dirname,'../src/lib/node-balances.ts'),'utf8');
   const js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText;
   const module={exports:{}};
-  vm.runInNewContext('(function(require,module,exports){'+js+'\n})',{setTimeout,clearTimeout,Date,Error})(id=>id==='ethers'?{...ethers,providers:{JsonRpcProvider:Provider}}:{PONS_CHAIN_ID:4663,PONS_RPC:'https://rpc.mainnet.chain.robinhood.com'},module,module.exports);
+  vm.runInNewContext('(function(require,module,exports){'+js+'\n})',{setTimeout,clearTimeout,Date,Error})(id=>id==='ethers'?{...ethers,providers:{StaticJsonRpcProvider:Provider}}:{PONS_CHAIN_ID:4663,PONS_RPC:'https://rpc.mainnet.chain.robinhood.com'},module,module.exports);
   return {...module.exports,calls,get maximum(){return maximum}};
 }
 test('node balances use exact values, one block and bounded concurrency without wallet signing',async()=>{
