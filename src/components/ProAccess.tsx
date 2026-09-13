@@ -7,6 +7,15 @@ import { verifyHolderWallet } from '../lib/holder-wallet';
 import { getWalletProvider, getWalletVersion, subscribeWalletProvider } from '../lib/wallet-provider';
 type Access = ProAccessState;
 const NONE = EMPTY_PRO_ACCESS;
+class AccountRequestError extends Error {
+  constructor(message: string, readonly retryable: boolean) {
+    super(message);
+    this.name = 'AccountRequestError';
+  }
+}
+function retryableStatusFailure(error: unknown) {
+  return error instanceof AccountRequestError && error.retryable;
+}
 export default function ProAccess({ onAccessChange, onSessionIdentityChange, salesEnabled = false }: { onAccessChange: (value: boolean) => void; salesEnabled?: boolean; onSessionIdentityChange?: (value: string | null) => void }) {
   const [access, setAccess] = useState<Access>(NONE);
   const [email, setEmail] = useState(''); const [code, setCode] = useState('');
@@ -17,18 +26,35 @@ export default function ProAccess({ onAccessChange, onSessionIdentityChange, sal
   const generation = useRef(0);
   const accountMutation = useRef(false);
   const walletGeneration = useRef(0); const mounted = useRef(true); const walletBusy = useRef(false);
-  const request = useCallback(async (action: string, data: Record<string, string> = {}, options: {keepalive?:boolean} = {}) => {
-    const response = await fetch('/api/account', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, ...data }), keepalive: options.keepalive === true, signal: AbortSignal.timeout(20000) });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || 'Account services are unavailable.');
-    return result;
+  const request = useCallback(async (action: string, data: Record<string, string> = {}, options: {keepalive?:boolean;signal?:AbortSignal} = {}) => {
+    const signal = options.signal || AbortSignal.timeout(20000);
+    let response: Response;
+    try {
+      response = await fetch('/api/account', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, ...data }), keepalive: options.keepalive === true, signal });
+    } catch (error) {
+      if (signal.aborted || (error instanceof DOMException && ['AbortError', 'TimeoutError'].includes(error.name))) throw error;
+      throw new AccountRequestError(error instanceof Error ? error.message : 'Account services are unavailable.', true);
+    }
+    if (response.ok) return response.json();
+    let message = 'Account services are unavailable.';
+    try {
+      const result = await response.json() as { error?: unknown };
+      if (typeof result?.error === 'string' && result.error) message = result.error;
+    } catch { /* HTTP status determines retry safety when an intermediary returns a non-JSON error. */ }
+    throw new AccountRequestError(message, response.status === 408 || response.status === 425 || response.status >= 500);
   }, []);
   const refresh = useCallback(async () => {
     if (accountMutation.current) return;
     try { if(pendingAuthIds().length) { onSessionIdentityChange?.(null); onAccessChange(false); setAccess(NONE); setUnresolvedAuth(true); return; } } catch(error) { onSessionIdentityChange?.(null); onAccessChange(false); setAccess(NONE); setUnresolvedAuth(true); setMessage(error instanceof Error ? error.message : 'Account storage is unavailable.'); return; }
     const sequence = ++generation.current;
     try {
-      const result = await request('status') as Access;
+      const signal = AbortSignal.timeout(20000);
+      let result: Access;
+      try { result = await request('status', {}, { signal }) as Access; }
+      catch (error) {
+        if (!retryableStatusFailure(error) || signal.aborted) throw error;
+        result = await request('status', {}, { signal }) as Access;
+      }
       if (!mounted.current || accountMutation.current || sequence !== generation.current || pendingAuthIds().length) return;
       if (result.signInAvailable !== true) { setSent(false); setCode(''); }
       onSessionIdentityChange?.(result.signedIn === true && typeof result.sessionIdentity === 'string' && /^[a-f0-9]{64}$/.test(result.sessionIdentity) ? result.sessionIdentity : null);
