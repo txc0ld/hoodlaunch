@@ -87,16 +87,29 @@ function operationLabel(operation: NodeTradeOperation) {
   return "Outcome unknown · do not resubmit";
 }
 
-function refreshedBatchOutcome(results: readonly NodeTradeBatchResult[]): SubmissionOutcome {
+function refreshedBatchOutcome(results: readonly NodeTradeBatchResult[], batch: NodeTradeBatch | null): SubmissionOutcome {
   const operations = results.flatMap((result) => result.operation ? [result.operation] : []);
   const unsent = results.filter((result) => result.status === "error" || result.status === "not-submitted");
-  const unknown = operations.find((operation) => operation.status === "unknown");
-  const failed = operations.find((operation) => operation.status === "failed");
+  const unknownResult = results.find((result) => result.operation?.status === "unknown");
+  const failedResult = results.find((result) => result.operation?.status === "failed");
+  const unknown = unknownResult?.operation;
+  const failed = failedResult?.operation;
   const pending = operations.some((operation) => operation.status === "pending");
   if (unsent.length) {
-    const reason = unsent.find((result) => result.error)?.error || "Check each node's result below.";
-    const receiptState = unknown ? ` One submitted transaction has an unknown outcome. ${unknown.message}`
-      : failed ? ` One submitted transaction failed. ${failed.message}`
+    const deferredNodeIndexes = new Set(batch?.entries.filter((entry) => entry.status === "deferred").map((entry) => entry.nodeIndex));
+    const deferredSales = unsent.filter((result) => deferredNodeIndexes.has(result.nodeIndex));
+    const actionable = results.find((result) => result.status === "error" || result.status === "unknown" || result.operation?.status === "unknown" || result.operation?.status === "failed");
+    const evidence = actionable || unsent.find((result) => !deferredSales.includes(result)) || deferredSales[0];
+    const reason = evidence
+      ? `Node ${evidence.nodeIndex + 1}: ${evidence.operation?.status === "unknown" || evidence.operation?.status === "failed" ? evidence.operation.message : evidence.error || "Check this node's result below."}`
+      : "Check each node's result below.";
+    const failedApprovals = deferredSales.length ? unsent.filter((result) => result.status === "error").length : 0;
+    const skippedApprovals = deferredSales.length ? unsent.length - deferredSales.length - failedApprovals : 0;
+    const unsentSummary = deferredSales.length
+      ? `${deferredSales.length} sale${deferredSales.length === 1 ? " was" : "s were"} deliberately deferred. ${failedApprovals} approval${failedApprovals === 1 ? "" : "s"} failed and ${skippedApprovals} approval${skippedApprovals === 1 ? " was" : "s were"} skipped.`
+      : `${unsent.length} node${unsent.length === 1 ? " was" : "s were"} not submitted.`;
+    const receiptState = unknown ? evidence === unknownResult ? "" : ` Node ${unknownResult.nodeIndex + 1} has an unknown submitted outcome. ${unknown.message}`
+      : failed ? evidence === failedResult ? "" : ` Node ${failedResult.nodeIndex + 1} has a failed submitted transaction. ${failed.message}`
       : pending ? " Submitted transactions are still awaiting confirmation."
       : operations.length ? operations.every((operation) => operation.action.startsWith("approve"))
         ? " Submitted approvals are confirmed; choose Sell Max All Nodes again for the remaining nodes."
@@ -104,7 +117,7 @@ function refreshedBatchOutcome(results: readonly NodeTradeBatchResult[]): Submis
       : "";
     return {
       label: operations.length ? "Some nodes submitted · others not submitted" : "Could not submit",
-      error: `${unsent.length} node${unsent.length === 1 ? " was" : "s were"} not submitted. ${reason}${receiptState}`,
+      error: `${unsentSummary} ${reason}${receiptState}`,
     };
   }
   if (unknown) return { label: "Outcome unknown", error: unknown.message };
@@ -207,6 +220,8 @@ export default function NodeTrading({ accountReadiness = false, session, launche
   operationsRef.current = operations;
   const batchResultsRef = useRef(batchResults);
   batchResultsRef.current = batchResults;
+  const batchRef = useRef(batch);
+  batchRef.current = batch;
   const tradeReviewStateRef = useRef(review);
   tradeReviewStateRef.current = review;
   const selectionRef = useRef({ session, launchedTokenAddress });
@@ -235,7 +250,7 @@ export default function NodeTrading({ accountReadiness = false, session, launche
       if (updatedResults.some((result, index) => result.operation !== existingResults[index]?.operation)) {
         batchResultsRef.current = updatedResults;
         setBatchResults(updatedResults);
-        setBatchOutcome(refreshedBatchOutcome(updatedResults));
+        setBatchOutcome(refreshedBatchOutcome(updatedResults, batchRef.current));
       }
       const tradeBinding = tradeOutcomeOperationRef.current;
       if (tradeBinding?.txHash === next.txHash && tradeReviewStateRef.current === tradeBinding.review) setTradeOutcome(submissionOutcome(next));
@@ -663,7 +678,7 @@ export default function NodeTrading({ accountReadiness = false, session, launche
         });
         batchResultsRef.current = mergedResults;
         setBatchResults(mergedResults);
-        setBatchOutcome(refreshedBatchOutcome(mergedResults));
+        setBatchOutcome(refreshedBatchOutcome(mergedResults, next));
       }
     } catch (caught) {
       if (generation === generationRef.current && selectionRef.current.session === currentSession && selectionRef.current.launchedTokenAddress === currentLaunch) {
