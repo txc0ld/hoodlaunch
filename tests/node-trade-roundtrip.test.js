@@ -133,7 +133,7 @@ async function loopbackRpc({ delayMs = 5, chainId = '0x1237', phase = 0, sellGas
     if (method === rejectedMethod) throw new Error('fixture provider rejection');
     if (method === 'eth_chainId') return chainIdResponses.length ? chainIdResponses.shift() : currentChainId;
     if (method === 'eth_blockNumber') return ethers.utils.hexValue(state.mined + 2);
-    if (method === 'eth_getBalance') return state.balance.toHexString();
+    if (method === 'eth_getBalance') return (params[1] === 'pending' && state.pendingBalance !== undefined ? state.pendingBalance : state.balance).toHexString();
     if (method === 'eth_getTransactionCount') return ethers.utils.hexValue(params[1] === 'pending' ? (accountNonces.get(params[0].toLowerCase()) || 0) : latestNonce);
     if (method === 'eth_getCode') return runtimes[params[0].toLowerCase()] || '0x1234';
     if (method === 'eth_getBlockByNumber') return { ...block, baseFeePerGas: state.feeBase };
@@ -490,6 +490,107 @@ async function feeReview(t, { phase = 0, action = 'approve-token' } = {}) {
   }
   return { ...h, rpc, review };
 }
+
+async function sellAffordabilityFixture(t, { phase = 0, balance = '273277424450000', sellGas = 125774, baseFee = '85675000' } = {}) {
+  const rpc = await loopbackRpc({ delayMs: 0, phase, sellGas }); t.after(() => rpc.close());
+  rpc.state.feeBase = ethers.BigNumber.from(baseFee).toHexString();
+  rpc.state.balance = ethers.BigNumber.from(balance);
+  rpc.state.holding = eth('100'); rpc.state.allowance = eth('100');
+  rpc.state.permit = eth('100'); rpc.state.permitExpiration = Math.floor(Date.now() / 1000) + 3600;
+  const h = actualProviderTrading(rpc.url);
+  return { ...h, rpc };
+}
+
+for (const phase of [0, 2]) for (const amount of [100, 50, { amount: '25' }]) test(`sell affordability: phase ${phase} amount ${JSON.stringify(amount)} final sale can spend its full reviewed upfront gas without a future-step floor`, async t => {
+  const h = await sellAffordabilityFixture(t, { phase }); const { rpc } = h;
+  const batch = amount === 100 ? await h.batch.prepareNodeTradeBatch(h.session, TOKEN, 'sell', () => {}) : { entries: [{ status: 'ready', review: await h.trading.prepareTrade(h.session, 0, wallet.address, TOKEN, 'sell', amount, () => {}) }] };
+  console.log('SELL_AFFORDABILITY ' + JSON.stringify({ phase, balance: rpc.state.balance.toString(), expectedUpfrontGas: '273277424450000', status: batch.entries[0].status, error: batch.entries[0].error }));
+  assert.equal(batch.entries[0].status, 'ready', batch.entries[0].error);
+  const review = batch.entries[0].review;
+  assert.equal(review.gasLimit, '163507'); assert.equal(review.maxFeePerGasWei, '1671350000');
+  assert.equal(review.requiredRemainingEthWei, '0'); assert.equal(review.gasReserveWei, review.maxGasCostWei);
+  assert.equal(review.amountInRaw, eth(amount === 100 ? '100' : amount === 50 ? '50' : '25').toString());
+  const operation = await h.trading.executeTrade(h.session, review, () => {}, tx => wallet.signTransaction(tx));
+  assert.equal(operation.status, 'pending'); assert.equal(rpc.state.transactions.size, 1);
+});
+
+for (const balance of ['48750000000000', '50000000000000']) test(`sell affordability: funded final sale at balance ${balance} at or below the old floor`, async t => {
+  const h = await sellAffordabilityFixture(t, { balance, sellGas: 25000, baseFee: '0' });
+  const batch = await h.batch.prepareNodeTradeBatch(h.session, TOKEN, 'sell', () => {});
+  console.log('SELL_LOW_BALANCE ' + JSON.stringify({ balance, status: batch.entries[0].status, error: batch.entries[0].error }));
+  assert.equal(batch.entries[0].status, 'ready', batch.entries[0].error);
+  assert.equal(batch.entries[0].review.maxTotalEthWei, '48750000000000');
+  const result = await h.batch.executeNodeTradeBatch(h.session, batch, () => {});
+  assert.equal(result[0].status, 'submitted'); assert.equal(h.rpc.state.transactions.size, 1);
+});
+
+for (const delta of [0, -1]) test(`sell affordability: pending execution balance at upfront cost ${delta} wei`, async t => {
+  const h = await sellAffordabilityFixture(t, { balance: eth('1').toString() });
+  const review = await h.trading.prepareTrade(h.session, 0, wallet.address, TOKEN, 'sell', 100, () => {});
+  h.rpc.state.pendingBalance = ethers.BigNumber.from(review.maxTotalEthWei).add(delta);
+  let signs = 0; const sign = tx => { signs++; return wallet.signTransaction(tx); };
+  const start = h.rpc.requests.length;
+  if (delta === 0) {
+    const operation = await h.trading.executeTrade(h.session, review, () => {}, sign);
+    assert.equal(operation.status, 'pending'); assert.equal(signs, 1);
+  } else {
+    await assert.rejects(h.trading.executeTrade(h.session, review, () => {}, sign), /insufficient ETH/);
+    assert.equal(signs, 0); assert.equal(h.rpc.state.transactions.size, 0);
+  }
+  assert.ok(h.rpc.requests.slice(start).some(r => r.method === 'eth_getBalance' && r.params[1] === 'pending'));
+});
+
+for (const balance of ['273277424449999', '171212810152000']) test(`sell diagnosis: upfront shortage at ${balance} wei does not sign or broadcast`, async t => {
+  const h = await sellAffordabilityFixture(t, { balance });
+  const batch = await h.batch.prepareNodeTradeBatch(h.session, TOKEN, 'sell', () => {});
+  console.log('SELL_SHORTAGE ' + JSON.stringify({ balance, status: batch.entries[0].status, error: batch.entries[0].error }));
+  assert.equal(batch.entries[0].status, 'blocked');
+  assert.match(batch.entries[0].error, /gas/);
+  if (balance === '273277424449999') {
+    assert.match(batch.entries[0].error, /upfront transaction gas.*shortfall 0.000000000000000001 ETH/);
+    assert.ok(batch.entries[0].error.length < 300);
+  }
+  assert.equal(h.rpc.state.transactions.size, 0);
+  const estimates = h.rpc.requests.filter(r => r.method === 'eth_estimateGas');
+  assert.equal(estimates.length, 1);
+  assert.equal(ethers.BigNumber.from(estimates[0].params[0].maxFeePerGas).toString(), '1671350000');
+  assert.equal(ethers.BigNumber.from(estimates[0].params[0].maxPriorityFeePerGas).toString(), '1500000000');
+  assert.equal(estimates[0].params[0].gasPrice, undefined, 'Sale estimation explicitly supplies reviewed EIP-1559 fees');
+  assert.ok(h.rpc.requests.some(r => r.method === 'eth_getBalance' && r.params[1] === 'pending'));
+});
+
+for (const [phase, action, buffer] of [[0, 'approve-token', '0.00005'], [2, 'approve-token', '0.0001'], [2, 'approve-router', '0.00005']]) test(`sell affordability: phase ${phase} ${action} keeps its following-step reserve`, async t => {
+  const h = await sellAffordabilityFixture(t, { phase, balance: eth('1').toString() });
+  if (action === 'approve-token') h.rpc.state.allowance = eth('0');
+  else h.rpc.state.permit = eth('0');
+  const prepare = () => h.trading.prepareTrade(h.session, 0, wallet.address, TOKEN, 'sell', 100, () => {});
+  const original = await prepare(); assert.equal(original.action, action);
+  assert.equal(original.requiredRemainingEthWei, eth(buffer).toString());
+  const needed = ethers.BigNumber.from(original.maxTotalEthWei).add(eth(buffer));
+  h.rpc.state.balance = needed.sub(1);
+  await assert.rejects(prepare(), error => {
+    assert.match(error.message, /gas reserve for following steps/);
+    assert.match(error.message, /shortfall 0.000000000000000001 ETH/);
+    assert.ok(error.message.length < 300); return true;
+  });
+  h.rpc.state.balance = ethers.BigNumber.from(original.maxTotalEthWei).sub(1);
+  await assert.rejects(prepare(), error => {
+    assert.match(error.message, /upfront transaction gas/);
+    assert.ok(error.message.includes(`need ${ethers.utils.formatEther(needed)}`));
+    assert.ok(error.message.includes(`shortfall ${ethers.utils.formatEther(eth(buffer).add(1))} ETH`));
+    assert.ok(error.message.includes(`reserve ${buffer}`));
+    assert.ok(error.message.length < 300); return true;
+  });
+  assert.equal(h.rpc.state.transactions.size, 0);
+  h.rpc.state.balance = needed; const review = await prepare();
+  assert.equal(review.gasReserveWei, original.gasReserveWei);
+  h.rpc.state.pendingBalance = needed.sub(1); let signs = 0;
+  await assert.rejects(h.trading.executeTrade(h.session, review, () => {}, async () => { signs++; throw Error('unexpected signer'); }), /gas reserve for following steps/);
+  assert.equal(signs, 0); assert.equal(h.rpc.state.transactions.size, 0);
+  h.rpc.state.pendingBalance = needed;
+  const operation = await h.trading.executeTrade(h.session, review, () => {}, tx => wallet.signTransaction(tx));
+  assert.equal(operation.action, action); assert.equal(h.rpc.state.transactions.size, 1);
+});
 
 for (const [phase, actions] of [[0, ['buy', 'sell', 'approve-token']], [2, ['buy', 'sell', 'approve-token', 'approve-router']]]) {
   for (const action of actions) test(`phase ${phase} ${action}: tiny base rise keeps exact reviewed signed fees and one broadcast`, async t => {

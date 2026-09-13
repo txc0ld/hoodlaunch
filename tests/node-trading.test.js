@@ -172,7 +172,7 @@ test('funded nodes buy every preset using actual gas budget rather than the hard
 test('approved sells and approvals budget actual gas with explicitly limited future-step buffers',async()=>{
  for(const phase of [0,2]){
   const h=harness({phase,balance:'0.002984103299794045',allowance:eth('100'),permit:eth('100')}),r=await prepare(h,'sell',100);
-  assert.equal(r.action,'sell');assert.equal(r.amountInRaw,eth('100').toString());assert.equal(r.requiredRemainingEthWei,eth('0.00005').toString());
+  assert.equal(r.action,'sell');assert.equal(r.amountInRaw,eth('100').toString());assert.equal(r.requiredRemainingEthWei,'0');
   const approval=await prepare(harness({phase,balance:'0.002984103299794045'}),'sell',100);
   assert.equal(approval.action,'approve-token');assert.equal(approval.requiredRemainingEthWei,eth(phase===2?'0.0001':'0.00005').toString());
   assert.ok(bn(approval.maxTotalEthWei).add(approval.requiredRemainingEthWei).lte(approval.ethBalanceWei));

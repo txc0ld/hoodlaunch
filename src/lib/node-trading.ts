@@ -32,6 +32,13 @@ function paddedGas(estimate:BigNumber):BigNumber {
   if(gas.lte(0)||gas.gt(GAS_CAP))throw new Error('Estimated trade gas exceeds the supported bound.');
   return gas;
 }
+function assertAffordable(balance:BigNumber,total:BigNumber,futureReserve:BigNumber):void {
+  const upfront=balance.lt(total),needed=total.add(futureReserve);
+  if(balance.gte(needed))return;
+  const reason=upfront?'upfront transaction gas and value':'reviewed cost and gas reserve for following steps';
+  const reserve=futureReserve.isZero()?'':`, reserve ${utils.formatEther(futureReserve)}`;
+  throw new Error(`This node has insufficient ETH for ${reason}. Balance ${utils.formatEther(balance)}, need ${utils.formatEther(needed)}, shortfall ${utils.formatEther(needed.sub(balance))} ETH${reserve}. Fund the node, refresh balances, and prepare a fresh trade.`);
+}
 const reviews=new WeakMap<NodeTradeReview,{owner:object;used:boolean;tx:providers.TransactionRequest;launch:TradeLaunch;minimum:BigNumber;approvalExpiration?:number}>();
 const tokenInterface=new utils.Interface(TRADE_TOKEN_ABI),curveInterface=new utils.Interface(TRADE_CURVE_ABI),permitInterface=new utils.Interface(TRADE_PERMIT_ABI);
 interface TradeRecord {
@@ -97,7 +104,7 @@ export async function prepareTrade(owner:object,index:number,node:string,token:s
     if(typeof symbol!=='string'||symbol.length>64||!Number.isInteger(decimals)||decimals<0||decimals>36)throw new Error('Token metadata is invalid.');
     // The cap rejects unsafe estimates; it is not the gas every swap must afford.
     let reserve=GAS_FLOOR;
-    if(balance.lte(GAS_FLOOR))throw new Error('This node needs more Robinhood ETH for trading and gas.');
+    if(side==='buy'&&balance.lte(GAS_FLOOR))throw new Error('This node needs more Robinhood ETH for trading and gas.');
     let input=customAmount!==undefined?parseTradeAmount(customAmount,side==='buy'?18:decimals):percentageAmount(side==='buy'?balance.sub(reserve):holding,percent!);
     if(input.gt(side==='buy'?balance:holding))throw new Error('The custom trade amount exceeds this node balance.');
     if(input.lte(0))throw new Error('This node has too little balance for the selected percentage.');
@@ -124,6 +131,7 @@ export async function prepareTrade(owner:object,index:number,node:string,token:s
     // documented gas envelope; future actions still require fresh estimates.
     const exitGasUnits=side==='buy'&&percent===100?(launch.phase===0?3:4):0;
     const futureGasReserve=(gas:BigNumber)=>GAS_FLOOR.add(gas.mul(feeData.fee).mul(exitGasUnits));
+    const followingGasReserve=(gas:BigNumber)=>exitGasUnits?futureGasReserve(gas):action==='sell'?BigNumber.from(0):GAS_FLOOR.mul(isApproval&&launch.phase===2&&action==='approve-token'?2:1);
     // Reuse only this operation's block-pinned curve state across gas refinement.
     // Every execution below fetches its own fresh state and runtime verification.
     const [curveState]=await Promise.all([!isApproval&&launch.phase===0?readCurveQuote(p,launch,node,block):Promise.resolve(undefined),verifyTradeCode(p,launch.phase===2,block)]);
@@ -154,9 +162,9 @@ export async function prepareTrade(owner:object,index:number,node:string,token:s
       gas=paddedGas(await p.estimateGas(finalTx));
       const needed=gas.mul(feeData.fee).add(futureGasReserve(gas));
       if(side==='buy'&&needed.gt(reserve)){reserve=needed;if(percent!==null)continue;}
-      if(side==='sell')reserve=needed;
-      const followingBuffer=exitGasUnits?futureGasReserve(gas):GAS_FLOOR.mul(isApproval&&launch.phase===2&&action==='approve-token'?2:1);
-      if(balance.lt(value.add(gas.mul(feeData.fee)).add(followingBuffer)))throw new Error('This node needs more ETH to retain gas for the next trade step.');
+      const followingBuffer=followingGasReserve(gas);
+      if(side==='sell')reserve=action==='sell'?gas.mul(feeData.fee):needed;
+      assertAffordable(balance,value.add(gas.mul(feeData.fee)),followingBuffer);
       // Pin simulation to the affordable reviewed gas limit. RPC defaults can
       // otherwise charge a block-sized gas limit and reject a funded wallet.
       const simulation=await p.call({...finalTx,gasLimit:gas},'pending');
@@ -167,8 +175,8 @@ export async function prepareTrade(owner:object,index:number,node:string,token:s
     const maxGas=gas.mul(feeData.fee),total=value.add(maxGas);
     // Future steps require new estimates and separate explicit confirmations.
     // These retained floor buffers are not quotes or guarantees of future gas.
-    const futureReserve=exitGasUnits?futureGasReserve(gas):GAS_FLOOR.mul(isApproval&&launch.phase===2&&action==='approve-token'?2:1);
-    if(balance.lt(total.add(futureReserve)))throw new Error('This node needs more ETH to retain gas for the next trade step.');
+    const futureReserve=followingGasReserve(gas);
+    assertAffordable(balance,total,futureReserve);
     assertActive();available(node);await assertTradeChain(p);
     if(Date.now()>=expiresAt)throw new Error('The trade review expired during preparation. Get a fresh quote.');
     const review:NodeTradeReview=Object.freeze({nodeAddress:node,nodeIndex:index,tokenAddress:token,symbol,decimals,phase:launch.phase as 0|2,side,percent,...(customAmount!==undefined?{customAmount}:{}),action,
@@ -221,7 +229,7 @@ export async function executeTrade(owner:object,review:NodeTradeReview,assertAct
         isSell?t.allowance(review.nodeAddress,review.phase===0?launch.curve:TRADE_PERMIT2,{blockTag:block}):Promise.resolve(null),
         isSell&&review.phase===2?new Contract(TRADE_PERMIT2,TRADE_PERMIT_ABI,p).allowance(review.nodeAddress,review.tokenAddress,TRADE_ROUTER,{blockTag:block}):Promise.resolve(null),
       ]);
-      if(balance.lt(BigNumber.from(review.maxTotalEthWei).add(review.requiredRemainingEthWei)))throw new Error('This node has insufficient ETH for the reviewed cost and gas reserve. Fund the node, refresh balances, and prepare a fresh trade.');
+      assertAffordable(balance,BigNumber.from(review.maxTotalEthWei),BigNumber.from(review.requiredRemainingEthWei));
       if(feeData.nonce!==cap.tx.nonce)throw new Error('This node\'s transaction nonce changed. Refresh status and prepare a fresh trade.');
       // The new recommendation is not the cost of this immutable reviewed transaction.
       // Require the current base fee and the full original priority fee to fit its cap.
