@@ -64,7 +64,7 @@ test('percentages and supply share retain exact integers beyond Number precision
  assert.equal(h.p.supplyShare(bn(1),bn(3)),'33.333333');assert.equal(h.p.supplyShare(bn(3),bn(3)),'100.000000');
 });
 test('native buy Max preserves conservative gas and signs exactly its immutable review once',async()=>{
- const h=harness(),r=await prepare(h,'buy',100);assert.ok(Object.isFrozen(r));assert.equal(r.amountInRaw,eth('0.99969').toString());assert.ok(bn(r.balanceAfterMaxCostWei).gte(eth('0.00005')));
+ const h=harness(),r=await prepare(h,'buy',100);assert.ok(Object.isFrozen(r));assert.equal(r.amountInRaw,eth('0.99891').toString());assert.ok(bn(r.balanceAfterMaxCostWei).gte(eth('0.00005')));
  assert.equal(r.minimumIsRateBound,true);const op=await execute(h,r);assert.equal(op.status,'pending');await assert.rejects(execute(h,r));await assert.rejects(prepare(h));
  assert.equal(h.calls.filter(c=>c==='eth_sendRawTransaction').length,1);assert.ok([...h.mem.values()].every(s=>!s.includes(wallet.privateKey)));
  h.state.confirmed=true;assert.equal((await h.t.refreshNodeTradeOperation(wallet.address)).status,'confirmed');
@@ -146,8 +146,8 @@ test('expiry or forgotten session during signing cannot persist or broadcast',as
 test('funded nodes buy every preset using actual gas budget rather than the hard cap',async()=>{
  for(const phase of [0,2])for(const percent of [5,10,25,50,100]){
   const h=harness({phase,balance:'0.002984103299794045'}),r=await prepare(h,'buy',percent);
-  assert.equal(r.gasLimit,'130000');assert.equal(r.gasReserveWei,eth('0.00031').toString());
-  assert.equal(r.amountInRaw,eth('0.002674103299794045').mul(percent).div(100).toString());
+  assert.equal(r.gasLimit,'130000');const reserve=eth(percent===100?(phase===0?'0.00109':'0.00135'):'0.00031');assert.equal(r.gasReserveWei,reserve.toString());
+  assert.equal(r.amountInRaw,eth('0.002984103299794045').sub(reserve).mul(percent).div(100).toString());
   assert.ok(bn(r.maxTotalEthWei).add(r.requiredRemainingEthWei).lte(r.ethBalanceWei));
   const estimates=h.calls.filter(c=>Array.isArray(c)&&c[0]==='estimate');
   assert.ok(estimates.some(c=>c[1].gasPrice===0));
@@ -166,7 +166,7 @@ test('approved sells and approvals budget actual gas with explicitly limited fut
 });
 test('buy gas refinement is monotonic when input-dependent estimates increase then decrease',async()=>{
  const h=harness({balance:'0.002984103299794045',estimate:(tx,n)=>n===1?100000:n===2?160000:120000}),r=await prepare(h,'buy',100);
- assert.equal(r.gasReserveWei,eth('0.000466').toString());assert.equal(r.gasLimit,'156000');
+ assert.equal(r.gasReserveWei,eth('0.001714').toString());assert.equal(r.gasLimit,'156000');
  assert.equal(r.amountInRaw,bn(r.ethBalanceWei).sub(r.gasReserveWei).toString());
  const values=h.calls.filter(c=>Array.isArray(c)&&c[0]==='estimate').map(c=>bn(c[1].value));
  assert.ok(values.every((v,i)=>i===0||v.lte(values[i-1])));
@@ -185,7 +185,7 @@ test('unaffordable, hard-cap and nonconverging gas reject without signing',async
 });
 test('fee-bearing final estimate can grow and is re-budgeted before producing a buy review',async()=>{
  const h=harness({balance:'0.002984103299794045',estimate:tx=>tx.maxFeePerGas===undefined?100000:160000}),r=await prepare(h,'buy',100);
- assert.equal(r.gasLimit,'208000');assert.equal(r.gasReserveWei,eth('0.000466').toString());
+ assert.equal(r.gasLimit,'208000');assert.equal(r.gasReserveWei,eth('0.001714').toString());
  assert.equal(r.amountInRaw,bn(r.ethBalanceWei).sub(r.gasReserveWei).toString());
  assert.ok(bn(r.maxTotalEthWei).add(r.requiredRemainingEthWei).eq(r.ethBalanceWei));
 });

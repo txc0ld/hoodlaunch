@@ -118,6 +118,11 @@ export async function prepareTrade(owner:object,index:number,node:string,token:s
       }
     }
     const isApproval=action==='approve-token'||action==='approve-router';
+    // Max leaves a route budget for separately reviewed approvals and a sale.
+    // One padded buy-gas unit per approval and two for the sale cover the
+    // documented gas envelope; future actions still require fresh estimates.
+    const exitGasUnits=side==='buy'&&percent===100?(launch.phase===0?3:4):0;
+    const futureGasReserve=(gas:BigNumber)=>GAS_FLOOR.add(gas.mul(feeData.fee).mul(exitGasUnits));
     // Reuse only this operation's block-pinned curve state across gas refinement.
     // Every execution below fetches its own fresh state and runtime verification.
     const [curveState]=await Promise.all([!isApproval&&launch.phase===0?readCurveQuote(p,launch,node,block):Promise.resolve(undefined),verifyTradeCode(p,launch.phase===2,block)]);
@@ -126,7 +131,7 @@ export async function prepareTrade(owner:object,index:number,node:string,token:s
     const feeFields={type:2,maxFeePerGas:feeData.fee,maxPriorityFeePerGas:feeData.tip};
     for(let attempt=0;attempt<GAS_REFINEMENT_LIMIT;attempt++){
       if(side==='buy'){
-        if(balance.lte(reserve))throw new Error('This node needs more Robinhood ETH for trading and gas.');
+        if(balance.lte(reserve))throw new Error(exitGasUnits?'This node needs more Robinhood ETH for Max Buy to reserve gas for approvals and a sell. Fund the node or choose a smaller buy.':'This node needs more Robinhood ETH for trading and gas.');
         if(percent!==null)input=percentageAmount(balance.sub(reserve),percent);value=input;
       }
       if(input.lte(0))throw new Error('This node has too little balance for the selected percentage.');
@@ -141,15 +146,15 @@ export async function prepareTrade(owner:object,index:number,node:string,token:s
         // fee against a value that has not yet had actual gas deducted. It is never
         // retained or signed. The final request below uses the reviewed EIP-1559 fees.
         const probeGas=paddedGas(await p.estimateGas({...tx,gasPrice:0}));
-        const needed=probeGas.mul(feeData.fee).add(GAS_FLOOR);
+        const needed=probeGas.mul(feeData.fee).add(futureGasReserve(probeGas));
         if(needed.gt(reserve)){reserve=needed;if(percent!==null)continue;}
       }
       const finalTx={...tx,...feeFields};
       gas=paddedGas(await p.estimateGas(finalTx));
-      const needed=gas.mul(feeData.fee).add(GAS_FLOOR);
+      const needed=gas.mul(feeData.fee).add(futureGasReserve(gas));
       if(side==='buy'&&needed.gt(reserve)){reserve=needed;if(percent!==null)continue;}
       if(side==='sell')reserve=needed;
-      const followingBuffer=GAS_FLOOR.mul(isApproval&&launch.phase===2&&action==='approve-token'?2:1);
+      const followingBuffer=exitGasUnits?futureGasReserve(gas):GAS_FLOOR.mul(isApproval&&launch.phase===2&&action==='approve-token'?2:1);
       if(balance.lt(value.add(gas.mul(feeData.fee)).add(followingBuffer)))throw new Error('This node needs more ETH to retain gas for the next trade step.');
       // Pin simulation to the affordable reviewed gas limit. RPC defaults can
       // otherwise charge a block-sized gas limit and reject a funded wallet.
@@ -161,7 +166,7 @@ export async function prepareTrade(owner:object,index:number,node:string,token:s
     const maxGas=gas.mul(feeData.fee),total=value.add(maxGas);
     // Future steps require new estimates and separate explicit confirmations.
     // These retained floor buffers are not quotes or guarantees of future gas.
-    const futureReserve=GAS_FLOOR.mul(isApproval&&launch.phase===2&&action==='approve-token'?2:1);
+    const futureReserve=exitGasUnits?futureGasReserve(gas):GAS_FLOOR.mul(isApproval&&launch.phase===2&&action==='approve-token'?2:1);
     if(balance.lt(total.add(futureReserve)))throw new Error('This node needs more ETH to retain gas for the next trade step.');
     assertActive();available(node);await assertTradeChain(p);
     if(Date.now()>=expiresAt)throw new Error('The trade review expired during preparation. Get a fresh quote.');
@@ -172,8 +177,28 @@ export async function prepareTrade(owner:object,index:number,node:string,token:s
       ...(approvalSpender?{approvalSpender}:{}),...(approvalExpiration?{approvalExpiresAt:approvalExpiration*1000}:{})});
     reviews.set(review,{owner,used:false,launch,minimum:q.minimum,approvalExpiration,tx:Object.freeze({to,data,value:value.toString(),chainId:4663,type:2,nonce:feeData.nonce,gasLimit:gas.toString(),maxFeePerGas:feeData.fee.toString(),maxPriorityFeePerGas:feeData.tip.toString()})});
     return review;
-  }catch(e){if(e instanceof Error&&/node|trade|token|launch|pool|curve|network|gas|review|approval|contract|balance|percentage|storage|session|ETH/i.test(e.message))throw e;throw new Error('Could not safely prepare this trade. No transaction was signed.');}
+  }catch(e){if(e instanceof Error&&'code' in e&&e.code==='INSUFFICIENT_FUNDS')throw new Error('This node needs more Robinhood ETH for transaction gas. Fund the node, refresh balances, and prepare a new action.');if(e instanceof Error&&/node|trade|token|launch|pool|curve|network|gas|review|approval|contract|balance|percentage|storage|session|ETH/i.test(e.message))throw e;throw new Error('Could not safely prepare this trade. No transaction was signed.');}
   finally{p.removeAllListeners();}
+}
+
+// Retire an unsubmitted capability before a batch obtains its replacement.
+// Sharing the signing lock prevents a concurrently executing original from
+// escaping retirement and submitting alongside the renewed review.
+export async function retireNodeTradeReview(owner:object,review:NodeTradeReview,assertActive:()=>void):Promise<void> {
+  assertActive();
+  if(typeof navigator==='undefined'||!navigator.locks)throw new Error('Browser transaction locking is required for trading.');
+  await navigator.locks.request(LOCK_PREFIX+review.nodeAddress.toLowerCase(),{ifAvailable:true},async lock=>{
+    if(!lock)throw new Error('Another tab is operating this node.');
+    assertActive();available(review.nodeAddress);
+    const cap=reviews.get(review);
+    if(!cap||cap.owner!==owner||cap.used)throw new Error('This trade review is invalid or already used.');
+    cap.used=true;
+  });
+}
+
+export function assertNodeTradeReviewRoute(original:NodeTradeReview,fresh:NodeTradeReview):void {
+  const before=reviews.get(original),after=reviews.get(fresh);
+  if(!before||!after||before.owner!==after.owner||!sameLaunch(before.launch,after.launch))throw new Error('The launch route changed. Prepare a new explicit batch.');
 }
 
 export async function executeTrade(owner:object,review:NodeTradeReview,assertActive:()=>void,sign:(tx:providers.TransactionRequest)=>Promise<string>):Promise<NodeTradeOperation> {

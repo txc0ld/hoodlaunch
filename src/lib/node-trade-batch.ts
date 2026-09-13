@@ -4,6 +4,7 @@ import type { NodeSession } from './node-vault';
 import { tradeAddress } from './pons-trade';
 import type { NodeTradeSide } from './pons-trade';
 import type { NodeTradeReview, NodeTradeOperation } from './node-trading';
+import { retireNodeTradeReview, assertNodeTradeReviewRoute } from './node-trading';
 
 export interface NodeTradeBatchEntry {
   readonly nodeIndex:number; readonly nodeAddress:string;
@@ -17,7 +18,10 @@ export interface NodeTradeBatch {
 export interface NodeTradeBatchResult {
   readonly nodeIndex:number; readonly nodeAddress:string;
   readonly status:'submitted'|'unknown'|'error'|'not-submitted'; readonly operation?:NodeTradeOperation; readonly error?:string;
+  readonly renewed?:boolean;
 }
+const BATCH_INTENT_MS=5*60*1000;
+const RENEW_BEFORE_MS=15000;
 const batches=new WeakMap<NodeTradeBatch,{session:NodeSession;used:boolean}>();
 function errorText(error:unknown):string {return error instanceof Error?error.message.slice(0,300):'The node action could not be completed.';}
 function active(session:NodeSession,assertCurrent:()=>void):void {
@@ -34,6 +38,8 @@ function validateReview(review:NodeTradeReview,index:number,node:string,token:st
 
 export async function prepareNodeTradeBatch(session:NodeSession,token:string,side:NodeTradeSide,assertCurrent:()=>void):Promise<NodeTradeBatch> {
   active(session,assertCurrent);token=tradeAddress(token);
+  const expiresAt=Date.now()+BATCH_INTENT_MS;
+  const assertIntent=()=>{active(session,assertCurrent);if(Date.now()>=expiresAt)throw new Error('The batch intent expired. Prepare a fresh batch.');};
   if(side!=='buy'&&side!=='sell')throw new Error('Choose Buy or Sell.');
   if(session.addresses.length<1||session.addresses.length>MAX_NODES)throw new Error('The node batch size is invalid.');
   const nodes=session.addresses.map(tradeAddress);
@@ -41,25 +47,23 @@ export async function prepareNodeTradeBatch(session:NodeSession,token:string,sid
   const entries:NodeTradeBatchEntry[]=new Array(nodes.length);let next=0;
   async function worker():Promise<void>{
     while(next<nodes.length){
-      active(session,assertCurrent);const index=next++,node=nodes[index];
+      assertIntent();const index=next++,node=nodes[index];
       try{
         const review=await prepareNodeTrade(session,index,token,side,100);active(session,assertCurrent);
         validateReview(review,index,node,token,side);entries[index]={nodeIndex:index,nodeAddress:node,status:'ready',review};
       }catch(error){entries[index]={nodeIndex:index,nodeAddress:node,status:'blocked',error:errorText(error)};}
     }
   }
-  await Promise.all(Array.from({length:Math.min(3,nodes.length)},()=>worker()));active(session,assertCurrent);
+  await Promise.all(Array.from({length:Math.min(3,nodes.length)},()=>worker()));assertIntent();
   const mode=entries.some(entry=>entry.review&&approval(entry.review))?'approvals':'trades';
-  let maxGas=BigNumber.from(0),maxTotal=BigNumber.from(0),expiresAt=0;
+  let maxGas=BigNumber.from(0),maxTotal=BigNumber.from(0);
   const frozen=entries.map(entry=>{
     if(mode==='approvals'&&entry.review&&!approval(entry.review))entry={...entry,status:'deferred',error:'This sale is deferred until the approval-only batch is confirmed. Prepare Sell Max All again afterward.'};
     if(entry.status==='ready'&&entry.review){
       maxGas=maxGas.add(entry.review.maxGasCostWei);maxTotal=maxTotal.add(entry.review.maxTotalEthWei);
-      expiresAt=expiresAt?Math.min(expiresAt,entry.review.expiresAt):entry.review.expiresAt;
     }
     return Object.freeze(entry);
   });
-  if(expiresAt&&expiresAt<=Date.now())throw new Error('The batch review expired during preparation. Prepare a fresh batch.');
   const batch:NodeTradeBatch=Object.freeze({tokenAddress:token,side,mode,entries:Object.freeze(frozen),expiresAt,maxGasCostWei:maxGas.toString(),maxTotalEthWei:maxTotal.toString()});
   batches.set(batch,{session,used:false});return batch;
 }
@@ -68,7 +72,7 @@ export async function executeNodeTradeBatch(session:NodeSession,batch:NodeTradeB
   const cap=batches.get(batch);
   if(!cap||cap.session!==session||cap.used)throw new Error('This batch review is invalid or already used.');
   active(session,assertCurrent);
-  if(!batch.expiresAt||batch.expiresAt<=Date.now())throw new Error('No current executable batch review exists. Prepare a fresh batch.');
+  if(batch.expiresAt<=Date.now()||!batch.entries.some(entry=>entry.status==='ready'))throw new Error('No current executable batch review exists. Prepare a fresh batch.');
   // Consume before the first await: duplicate clicks can never enter a second loop.
   cap.used=true;const results:NodeTradeBatchResult[]=[];let stopped='';
   for(const entry of batch.entries){
@@ -85,13 +89,26 @@ export async function executeNodeTradeBatch(session:NodeSession,batch:NodeTradeB
       try{assertBatchCurrent();}catch(error){stopped=errorText(error);}
       if(stopped)result={...base,status:'not-submitted',error:stopped};
       else try{
-        const operation=await executeNodeTrade(session,entry.review,assertBatchCurrent);
+        let review=entry.review,renewed=false;
+        if(Date.now()+RENEW_BEFORE_MS>=review.expiresAt){
+          await retireNodeTradeReview(session,review,assertBatchCurrent);
+          const fresh=await prepareNodeTrade(session,entry.nodeIndex,batch.tokenAddress,batch.side,100);
+          assertBatchCurrent();validateReview(fresh,entry.nodeIndex,entry.nodeAddress,batch.tokenAddress,batch.side);
+          assertNodeTradeReviewRoute(review,fresh);
+          if(fresh.action!==review.action||fresh.phase!==review.phase||fresh.route!==review.route||fresh.amountInRaw!==review.amountInRaw||
+            fresh.approvalSpender!==review.approvalSpender||fresh.minimumIsRateBound!==review.minimumIsRateBound||
+            BigNumber.from(fresh.minimumOutputRaw).lt(review.minimumOutputRaw)||BigNumber.from(fresh.maxGasCostWei).gt(review.maxGasCostWei)||
+            BigNumber.from(fresh.maxTotalEthWei).gt(review.maxTotalEthWei)||BigNumber.from(fresh.maxFeePerGasWei).gt(review.maxFeePerGasWei)||
+            BigNumber.from(fresh.maxPriorityFeePerGasWei).gt(review.maxPriorityFeePerGasWei))throw new Error('The renewed trade no longer fits the original amount, route, price or cost bounds. Prepare a new explicit batch.');
+          review=fresh;renewed=true;
+        }
+        const operation=await executeNodeTrade(session,review,assertBatchCurrent);
         if(operation.nodeAddress!==entry.review.nodeAddress||operation.tokenAddress!==batch.tokenAddress||operation.action!==entry.review.action||operation.side!==batch.side||!['pending','confirmed','unknown'].includes(operation.status)){
           stopped='The node operation could not be matched conclusively. Check its status before any retry.';
           result={...base,status:'unknown',operation,error:stopped};
         }else{
           const unknown=operation.status==='unknown';
-          result={...base,status:unknown?'unknown':'submitted',operation};
+          result={...base,status:unknown?'unknown':'submitted',operation,...(renewed?{renewed:true}:{})};
           if(unknown)stopped='A node transaction has an uncertain outcome. Check its recorded hash before preparing another batch.';
         }
       }catch(error){stopped=errorText(error);result={...base,status:'error',error:stopped};}
